@@ -7,7 +7,7 @@ rem  PBI AI Bridge - the only file you ever double-click.
 rem
 rem  Every run walks the same checklist and only does what is missing:
 rem    already running?  -> just open the dashboard
-rem    .NET SDK          -> first time only (offers to install it)
+rem    .NET SDK          -> first time only (offers to install it, or to reinstall a damaged one)
 rem    settings file     -> first time only (copied from the template)
 rem    libraries         -> first time only (offers to download them)
 rem    compile           -> only when the program changed
@@ -175,6 +175,12 @@ echo       The .NET Runtime alone is not enough - it cannot compile.
 echo.
 where winget >nul 2>&1
 if errorlevel 1 goto SDK_MANUAL
+rem Windows can list the SDK as installed while its files are gone: an
+rem automatic update that stopped halfway leaves it like that. winget then
+rem treats an install as "already installed" and does nothing, and this
+rem window could only ever say "Still not found". Reinstall it instead.
+winget list --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-source-agreements --disable-interactivity 2>nul | findstr /l /i /c:"Microsoft.DotNet.SDK.8" >nul
+if not errorlevel 1 goto SDK_BROKEN
 echo       It can be installed right here with winget, the installer built into Windows:
 echo         Package   Microsoft .NET SDK 8   id: Microsoft.DotNet.SDK.8
 echo         Source    Microsoft, about 210 MB
@@ -208,6 +214,46 @@ if defined DOTNET goto SDK_OK
 echo       Still not found. If the installer is still running, wait for it to
 echo       finish and press R again.
 goto SDK_WAIT
+
+:SDK_BROKEN
+echo       Windows lists the .NET SDK 8 as installed, but its files are missing.
+echo       An automatic update that stopped halfway leaves it like this.
+echo       Installing again does nothing: Windows thinks it is already there.
+echo.
+echo       It can be fixed right here: remove the damaged copy, then install it again.
+echo         Package   Microsoft .NET SDK 8   id: Microsoft.DotNet.SDK.8
+echo         Source    Microsoft, about 210 MB
+echo         Note      Windows may ask for administrator permission twice.
+echo.
+choice /c YN /n /m "      Reinstall it now? [Y/N] "
+if errorlevel 2 goto SDK_REPAIR_MANUAL
+echo.
+winget uninstall --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-source-agreements
+winget install --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-package-agreements --accept-source-agreements
+call :FIND_DOTNET
+if defined DOTNET goto SDK_OK
+echo.
+echo       [ERROR] The reinstall did not finish, or it was cancelled.
+
+:SDK_REPAIR_MANUAL
+echo.
+echo       To repair it by hand:
+echo         1. Press O to open Settings - Apps - Installed apps
+echo         2. Find  Microsoft .NET SDK 8.0.x (x64) , click ... and choose Modify
+echo         3. Click Repair, wait for it to finish, then come back and press R
+echo.
+:SDK_REPAIR_WAIT
+choice /c ORQ /n /m "      O = open Installed apps,  R = check again,  Q = quit : "
+if errorlevel 3 exit /b 1
+if errorlevel 2 goto SDK_REPAIR_RECHECK
+start "" "ms-settings:appsfeatures"
+goto SDK_REPAIR_WAIT
+:SDK_REPAIR_RECHECK
+call :FIND_DOTNET
+if defined DOTNET goto SDK_OK
+echo       Still not found. If the repair is still running, wait for it to
+echo       finish and press R again.
+goto SDK_REPAIR_WAIT
 
 
 :CONFIG_FAIL

@@ -272,6 +272,11 @@ AI 和儀表板用的是同一組 API、同一把金鑰 —— 技術上 AI 叫�
 - 按 **N**，或安裝失敗（例如公司電腦停用了 winget）：畫面會列出手動步驟
   - 按 **O** 開啟下載頁 → 找「SDK 8.0.x」→ Windows **x64** Installer → 安裝（注意是 **SDK**，不是 Runtime）
   - 裝好回到黑窗按 **R** 重新檢查，不用重開；按 **Q** 離開
+- 畫面說 **"Windows lists the .NET SDK 8 as installed, but its files are missing"**：SDK 被自動更新弄壞了 ——
+  Windows 以為已經裝好，實際上檔案不見了，所以「再裝一次」不會有任何動作。按 **Y** 會先移除壞掉的那份、再重新安裝
+  （約 210 MB，可能跳兩次「是否允許此 App 變更你的裝置」）
+  - 按 **N** 或重裝失敗：按 **O** 開啟「設定 → 應用程式 → 已安裝的應用程式」，找到「Microsoft .NET SDK 8.0.x (x64)」→ ⋯ → **修改** → **修復**，
+    修好回到黑窗按 **R**
 
 ### 套件下載失敗
 
@@ -709,6 +714,7 @@ PBI_AI_Bridge/
 |---|---|
 | 雙擊 .bat 跳「開啟檔案 - 安全性警告」或「Windows 已保護您的電腦」 | 從網路下載的檔案都會這樣。前者按「執行」，後者按「其他資訊」→「仍要執行」。想以後都不再跳：刪掉解出來的資料夾，在 zip 上按右鍵 → 內容 → 勾「解除封鎖」後重新解壓縮 |
 | 啟動檔找不到 .NET SDK | 按 Y 讓它用 winget 安裝；不行就按 O 手動安裝「.NET SDK 8.x.x」，裝好按 R。見[第 3 節](#如果問你要不要安裝-net-sdk) |
+| 裝了 SDK 還是一直 "Still not found" | SDK 被更新弄壞了（Windows 以為有裝、檔案卻不在）。新版啟動檔會自己認出來並提議重裝；舊版就到「已安裝的應用程式」對「Microsoft .NET SDK 8.0.x」按 修改 → 修復 |
 | 啟動檔 4/5 下載失敗 | 見[套件下載失敗](#套件下載失敗) |
 | `[WARNING] This folder is inside OneDrive` | 建議把資料夾搬到本機，例如 `C:\PBI_AI_Bridge` |
 | 編譯失敗，訊息有 `being used by another process`（`MSB3027` / `CS2012`） | 同時有兩個啟動檔在編譯。關掉多的黑窗再雙擊一次 |
