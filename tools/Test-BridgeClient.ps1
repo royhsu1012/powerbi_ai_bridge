@@ -92,6 +92,69 @@ foreach ($b in $bats) {
           "金鑰由服務第一次啟動時產生，存在使用者資料夾 —— 專案資料夾裡不該有任何一份"
 }
 
+# 啟動檔畫面上的中文放在 tools\launcher-text.txt（.bat 只能有 ASCII），.bat 依代號印出。
+# 代號對不上時 .bat 什麼都不印、也不報錯；提問行對不上更糟 —— choice 沒有執行，
+# 上一個指令的 errorlevel 會被當成使用者的回答。
+$textPath = Join-Path $root 'tools\launcher-text.txt'
+$textOk   = Test-Path -LiteralPath $textPath
+Check "啟動檔文字：tools\launcher-text.txt 存在" $textOk "沒有它，啟動檔只能印出一行英文的錯誤訊息"
+if ($textOk -and $bats.Count -ge 1) {
+    $batRaw = ($bats | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
+    Check "啟動檔文字：.bat 讀的是 tools\launcher-text.txt" ($batRaw -match 'set "TEXT=%ROOT%tools\\launcher-text\.txt"') ""
+
+    $tBytes = [System.IO.File]::ReadAllBytes($textPath)
+    $tText  = $null
+    try { $tText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($tBytes) } catch { }
+    Check "啟動檔文字：是合法的 UTF-8" ($null -ne $tText) "請存成 UTF-8（不要存成 ANSI / Big5），不然畫面會變亂碼"
+    if ($tText) {
+        $tLines = @($tText.TrimStart([char]0xFEFF) -split "\r?\n")
+        # 有 BOM 時 cmd 會把它當成第一行的開頭 —— 第一行是註解就無害
+        Check "啟動檔文字：第一行是註解" ($tLines[0].StartsWith('#')) "第一行如果是文字，存檔時多出的 BOM 會黏在代號前面，那一個代號就找不到"
+
+        $entries = @{}; $noKey = @()
+        for ($i = 0; $i -lt $tLines.Count; $i++) {
+            $l = $tLines[$i]
+            if ($l -eq '' -or $l.StartsWith('#')) { continue }
+            $bar = $l.IndexOf('|')
+            if ($bar -lt 1) { $noKey += "第 $($i + 1) 行"; continue }
+            $k = $l.Substring(0, $bar)
+            if (-not $entries.ContainsKey($k)) { $entries[$k] = New-Object System.Collections.ArrayList }
+            [void]$entries[$k].Add($l.Substring($bar + 1))
+        }
+        Check "啟動檔文字：每一行都有代號" ($noKey.Count -eq 0) "這些行不會被印出來：$($noKey -join '、')"
+
+        # rem 行裡的「call :SAY KEY」是說明用的範例，不算
+        $batCode = (($batRaw -split "\r?\n") | Where-Object { $_ -notmatch '^\s*rem\b' }) -join "`n"
+        $uses = @{}
+        foreach ($m in [regex]::Matches($batCode, '(?im)call :(SAYN|SAY|ASK) ([A-Z0-9_]+)')) {
+            $uses[$m.Groups[2].Value] = $m.Groups[1].Value.ToUpper()
+        }
+        $missing = @($uses.Keys | Where-Object { -not $entries.ContainsKey($_) } | Sort-Object)
+        Check "啟動檔文字：.bat 用到的代號都有文字" ($missing.Count -eq 0) "找不到：$($missing -join '、')"
+        $unused = @($entries.Keys | Where-Object { -not $uses.ContainsKey($_) } | Sort-Object)
+        Check "啟動檔文字：沒有用不到的代號" ($unused.Count -eq 0) "可能是 .bat 改了代號、文字沒跟著改：$($unused -join '、')"
+
+        # 同一行接結果（set /p）與提問（choice）都只能有一行，兩者都會吃掉行首的半形空白，也都包在雙引號裡
+        $oneLine = @($uses.Keys | Where-Object { $uses[$_] -in 'SAYN', 'ASK' -and $entries.ContainsKey($_) } | Where-Object {
+            $v = $entries[$_]
+            $v.Count -ne 1 -or $v[0].Contains('"') -or $v[0] -match '^[ \t]'
+        } | Sort-Object)
+        Check "啟動檔文字：步驟行與提問行都是一行、沒有雙引號、開頭不是半形空白" ($oneLine.Count -eq 0) `
+              "$($oneLine -join '、') —— 提問行要縮排請用全形空白「　」"
+
+        # 中文字在主控台佔兩格。保守起見 U+1100 以上一律算兩格
+        $tooWide = @(foreach ($k in $entries.Keys) {
+            foreach ($v in $entries[$k]) {
+                $w = 0; foreach ($ch in $v.ToCharArray()) { $w += $(if ([int]$ch -ge 0x1100) { 2 } else { 1 }) }
+                if ($w -gt 80) { "$k（$w 格）" }
+            }
+        })
+        Check "啟動檔文字：每行不超過 80 格" ($tooWide.Count -eq 0) "會在較窄的視窗裡斷行：$($tooWide -join '、')"
+        Check "啟動檔文字：沒有 Tab 與控制字元" (-not [regex]::IsMatch($tText, '[\x00-\x08\x09\x0B\x0C\x0E-\x1F\x7F]')) `
+              "Tab 在主控台的寬度不固定，排版會亂"
+    }
+}
+
 # 金鑰不在專案資料夾裡：範本如果又長出金鑰欄位，啟動檔會把它原樣複製成 appsettings.json，
 # 使用者就會以為要自己填一把（而服務根本不讀它）
 $template = Join-Path $root 'pbibridge_csharp\appsettings.template.json'

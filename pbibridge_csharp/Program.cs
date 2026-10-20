@@ -3394,9 +3394,14 @@ namespace PBIBridgeCSharp {
         }
 
         static void Main(string[] args) {
-            // 主控台不是 UTF-8 時（繁中 Windows 預設 cp950），emoji 會印成 "??" —— 改印文字標記
+            // emoji 只有在「UTF-8 + Windows Terminal」才畫得出來：cp950（繁中 Windows 預設）會印成 "??"，
+            // 傳統主控台就算是 UTF-8 也只畫得出方框。啟動檔為了讀 UTF-8 的畫面文字會把視窗切成 65001、
+            // 而且不切回來（切碼頁會讓 Windows Terminal 清掉整個畫面），所以光看碼頁不夠 ——
+            // 沒有 WT_SESSION 就改印文字標記（雙擊開的視窗不一定有這個變數，那時也是文字標記，和以前一樣）
             var consoleCodePage = Console.OutputEncoding.CodePage;
-            if (consoleCodePage != 65001)
+            bool emojiOk = consoleCodePage == 65001
+                        && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_SESSION"));
+            if (!emojiOk)
                 Console.SetOut(TextWriter.Synchronized(new ConsoleSymbolWriter(Console.Out, consoleCodePage)));
 
             // ✅ 強制將工作目錄設為 DLL 所在位置，防止捷徑啟動時找不到 appsettings.json

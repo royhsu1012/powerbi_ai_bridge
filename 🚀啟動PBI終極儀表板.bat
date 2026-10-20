@@ -16,6 +16,16 @@ rem
 rem  NOTE: keep this file ASCII-only with CRLF line endings.
 rem  cmd.exe tracks its position in a batch file in BYTES. Multi-byte text or
 rem  LF-only line endings make it lose its place, and goto / labels break.
+rem
+rem  So everything shown on screen lives in tools\launcher-text.txt (UTF-8),
+rem  one line per screen line (the key, a bar, the text), and this file only
+rem  names the keys:
+rem    call :SAY KEY        prints the lines of KEY
+rem    call :SAYN KEY       prints a one-line KEY and stays on that line
+rem    call :ASK KEY YN     shows a one-line question and waits for Y or N
+rem  The window is switched to code page 65001 so cmd reads that file as UTF-8,
+rem  and it stays there: switching back makes Windows Terminal clear the whole
+rem  screen. The server checks for itself whether it can show emoji.
 rem ---------------------------------------------------------------------------
 
 set "ROOT=%~dp0"
@@ -28,11 +38,21 @@ set "DLL=%BIN%\pbibridge_csharp.dll"
 set "STAMP=%BIN%\build.stamp"
 set "URL=http://localhost:5500/"
 set "SDKLIST=%TEMP%\pbi_bridge_sdks.txt"
+set "TEXT=%ROOT%tools\launcher-text.txt"
+rem dotnet prints a long welcome and telemetry notice the first time after an
+rem SDK install. It only hides that notice; it changes no telemetry setting.
+set "DOTNET_NOLOGO=1"
 
-echo ==============================================
-echo    PBI AI Bridge
-echo ==============================================
-echo.
+rem Without the text file nothing can be said in Chinese, so this one message
+rem stays in English here.
+if not exist "%TEXT%" goto NO_TEXT
+
+rem Switch to UTF-8 before the first line is printed, and never switch back:
+rem in Windows Terminal every code page change clears the screen.
+chcp 65001 >nul
+
+call :SAY BANNER
+
 
 rem === already running? =======================================================
 rem Double-clicking again while the server runs is common. Answer with the
@@ -41,8 +61,7 @@ netstat -ano | findstr /r /c:":5500 .*LISTENING" >nul 2>&1
 if errorlevel 1 goto STEP_FILES
 powershell -NoProfile -Command "try { if ((Invoke-RestMethod -Uri 'http://localhost:5500/ping' -TimeoutSec 3) -eq 'pong') { exit 0 } } catch { }; exit 1" >nul 2>&1
 if errorlevel 1 goto PORT_BUSY
-echo  The server is already running in another window.
-echo  Opening the dashboard - this window closes by itself.
+call :SAY RUNNING
 start "" "%URL%"
 timeout /t 5 >nul
 exit /b 0
@@ -50,24 +69,28 @@ exit /b 0
 
 rem === [1/5] files ============================================================
 :STEP_FILES
-echo [1/5] Files
+call :SAYN STEP1
 if not exist "%PROJECT%\Program.cs" goto INCOMPLETE
 if not exist "%TEMPLATE%" goto INCOMPLETE
+set "NOTED="
 if not exist "%CONFIG%" call :LOCATION_CHECK
-echo       OK
+if not defined NOTED call :SAY R_OK
 
 
 rem === [2/5] .NET SDK =========================================================
-echo [2/5] .NET SDK
+call :SAYN STEP2
 call :FIND_DOTNET
 if not defined DOTNET goto NO_SDK
+call :SAY R_OK
 :SDK_OK
-echo       OK
 
 
 rem === [3/5] settings file ====================================================
-echo [3/5] Settings file
-if exist "%CONFIG%" goto CONFIG_OK
+call :SAYN STEP3
+if not exist "%CONFIG%" goto CONFIG_NEW
+call :SAY R_OK
+goto STEP_LIBS
+:CONFIG_NEW
 rem Nothing secret goes into this file. The API Key is not in it: the server
 rem creates the key the first time it starts and keeps it in the user profile
 rem (LOCALAPPDATA, folder PBI_AI_Bridge). That is outside this folder, so
@@ -76,19 +99,19 @@ rem So a plain copy of the template is all it takes.
 copy /y "%TEMPLATE%" "%CONFIG%" >nul
 if errorlevel 1 goto CONFIG_FAIL
 if not exist "%CONFIG%" goto CONFIG_FAIL
-echo       Created from the template. It holds no key and no password.
-echo       The server makes its own API Key the first time it starts.
-call :PROTECTION_REMINDER
-goto STEP_LIBS
-:CONFIG_OK
-echo       OK
+call :SAY R_CREATED
+call :SAY CONFIG_CREATED
+call :SAY PROTECTION
 
 
 rem === [4/5] libraries ========================================================
 :STEP_LIBS
-echo [4/5] Libraries
-if exist "%ASSETS%" goto LIBS_OK
+call :SAYN STEP4
+if not exist "%ASSETS%" goto LIBS_NEED
+call :SAY R_OK
+goto LIBS_OK
 
+:LIBS_NEED
 rem A freshly downloaded copy has no obj\, but the libraries may already sit in
 rem this computer's NuGet cache (another copy fetched them). Restore is then
 rem instant and offline - so do not ask about a download that will not happen.
@@ -96,59 +119,51 @@ set "NUGET_ROOT=%USERPROFILE%\.nuget\packages"
 if defined NUGET_PACKAGES set "NUGET_ROOT=%NUGET_PACKAGES%"
 if exist "%NUGET_ROOT%\microsoft.analysisservices.netcore.retail.amd64" goto LIBS_CACHED
 
-echo       First run: 6 libraries must be downloaded from nuget.org, about 17 MB.
-echo       They are Microsoft's Analysis Services client libraries. Only this once.
-echo.
-choice /c YN /n /m "      Download them now? [Y/N] "
+call :SAY R_FIRST
+call :SAY LIBS_ABOUT
+call :ASK ASK_LIBS YN
 if errorlevel 2 goto LIBS_DECLINED
-echo       Downloading...
+call :SAY LIBS_DOWNLOADING
 goto LIBS_RETRY
 
 :LIBS_CACHED
-echo       Already on this computer - reusing the cached copies.
+call :SAY R_CACHED
 
 :LIBS_RETRY
 "%DOTNET%" restore "%PROJECT%" --nologo -v q
 if errorlevel 1 goto RESTORE_FAIL
+call :SAY LIBS_DONE
 :LIBS_OK
-echo       OK
 
 
 rem === [5/5] compile and start ================================================
-echo [5/5] Compile
+call :SAYN STEP5
 if not exist "%DLL%" goto DO_BUILD
 if not exist "%STAMP%" goto DO_BUILD
 rem Compile only when the program changed: faster start, and no freshly written
 rem DLL for the antivirus to inspect on every launch.
 powershell -NoProfile -Command "$s=(Get-Item -LiteralPath $env:STAMP).LastWriteTimeUtc; foreach ($f in 'Program.cs','pbibridge_csharp.csproj') { if ((Get-Item -LiteralPath (Join-Path $env:PROJECT $f)).LastWriteTimeUtc -gt $s) { exit 1 } }; exit 0"
 if errorlevel 1 goto DO_BUILD
-echo       Up to date
+call :SAY R_UPTODATE
 goto START
 
 :DO_BUILD
-echo       Compiling, about 30 seconds...
+call :SAY R_BUILD
 "%DOTNET%" build "%PROJECT%" -c Release --nologo -v q
 if errorlevel 1 goto BUILD_FAIL
 if not exist "%DLL%" goto BUILD_FAIL
 type nul > "%STAMP%"
-echo       OK
+call :SAY BUILD_DONE
 
 :START
 rem Always refresh the settings copy the server reads. A plain copy is cheap and
 rem also covers a settings file restored from an older backup, which the
 rem compiler's newer-than check would skip.
 copy /y "%CONFIG%" "%BIN%\appsettings.json" >nul
-echo.
-echo ----------------------------------------------
-echo   Starting - the dashboard opens by itself.
-echo   KEEP THIS WINDOW OPEN. Closing it stops the server.
-echo   Dashboard address: %URL%
-echo ----------------------------------------------
-echo.
+call :SAY START
 "%DOTNET%" "%DLL%"
-echo.
-echo [EXIT] Server stopped. If that was unexpected, scroll up for the reason.
-pause
+call :SAY SERVER_EXIT
+pause >nul
 exit /b 0
 
 
@@ -156,180 +171,161 @@ rem ===========================================================================
 rem  Problems - each one explains what happened and what to do
 rem ===========================================================================
 
-:INCOMPLETE
+:NO_TEXT
 echo.
-echo [ERROR] Some files are missing from this folder.
-echo         Expected: pbibridge_csharp\Program.cs and appsettings.template.json
-echo.
-echo         The copy you received is incomplete. Get the whole folder again,
-echo         and unzip it first - do not run it from inside the zip.
+echo [ERROR] This folder is incomplete: tools\launcher-text.txt is missing.
+echo         Get the whole folder again, and unzip it first - do not run it
+echo         from inside the zip.
 echo.
 pause
 exit /b 1
 
 
+:INCOMPLETE
+call :SAY R_PROBLEM
+call :SAY INCOMPLETE
+call :SAY PRESS_CLOSE
+pause >nul
+exit /b 1
+
+
 :NO_SDK
-echo.
-echo       Not found. This tool needs the .NET SDK, version 8 or newer.
-echo       The .NET Runtime alone is not enough - it cannot compile.
-echo.
+call :SAY R_MISSING
+call :SAY SDK_NEEDED
 where winget >nul 2>&1
 if errorlevel 1 goto SDK_MANUAL
 rem Windows can list the SDK as installed while its files are gone: an
 rem automatic update that stopped halfway leaves it like that. winget then
 rem treats an install as "already installed" and does nothing, and this
-rem window could only ever say "Still not found". Reinstall it instead.
+rem window could only ever say "still not found". Reinstall it instead.
 winget list --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-source-agreements --disable-interactivity 2>nul | findstr /l /i /c:"Microsoft.DotNet.SDK.8" >nul
 if not errorlevel 1 goto SDK_BROKEN
-echo       It can be installed right here with winget, the installer built into Windows:
-echo         Package   Microsoft .NET SDK 8   id: Microsoft.DotNet.SDK.8
-echo         Source    Microsoft, about 210 MB
-echo         Note      Windows may ask for administrator permission.
-echo.
-choice /c YN /n /m "      Install it now? [Y/N] "
+call :SAY SDK_OFFER
+call :ASK ASK_SDK_INSTALL YN
 if errorlevel 2 goto SDK_MANUAL
 echo.
 winget install --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-package-agreements --accept-source-agreements
 call :FIND_DOTNET
-if defined DOTNET goto SDK_OK
-echo.
-echo       [ERROR] The install did not finish, or it was cancelled.
+if defined DOTNET goto SDK_READY
+call :SAY SDK_INSTALL_FAILED
 
 :SDK_MANUAL
-echo.
-echo       To install it by hand:
-echo         1. Open  https://dotnet.microsoft.com/download/dotnet/8.0
-echo         2. In the SDK 8.0.x column, pick  Windows  x64  Installer
-echo         3. Run the installer, then come back to this window and press R
-echo.
+call :SAY SDK_MANUAL
 :SDK_WAIT
-choice /c ORQ /n /m "      O = open that page,  R = check again,  Q = quit : "
+call :ASK ASK_SDK_MANUAL ORQ
 if errorlevel 3 exit /b 1
 if errorlevel 2 goto SDK_RECHECK
 start "" "https://dotnet.microsoft.com/download/dotnet/8.0"
 goto SDK_WAIT
 :SDK_RECHECK
 call :FIND_DOTNET
-if defined DOTNET goto SDK_OK
-echo       Still not found. If the installer is still running, wait for it to
-echo       finish and press R again.
+if defined DOTNET goto SDK_READY
+call :SAY SDK_STILL_MISSING
 goto SDK_WAIT
 
 :SDK_BROKEN
-echo       Windows lists the .NET SDK 8 as installed, but its files are missing.
-echo       An automatic update that stopped halfway leaves it like this.
-echo       Installing again does nothing: Windows thinks it is already there.
-echo.
-echo       It can be fixed right here: remove the damaged copy, then install it again.
-echo         Package   Microsoft .NET SDK 8   id: Microsoft.DotNet.SDK.8
-echo         Source    Microsoft, about 210 MB
-echo         Note      Windows may ask for administrator permission twice.
-echo.
-choice /c YN /n /m "      Reinstall it now? [Y/N] "
+call :SAY SDK_BROKEN
+call :ASK ASK_SDK_REINSTALL YN
 if errorlevel 2 goto SDK_REPAIR_MANUAL
 echo.
 winget uninstall --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-source-agreements
 winget install --id Microsoft.DotNet.SDK.8 --exact --source winget --accept-package-agreements --accept-source-agreements
 call :FIND_DOTNET
-if defined DOTNET goto SDK_OK
-echo.
-echo       [ERROR] The reinstall did not finish, or it was cancelled.
+if defined DOTNET goto SDK_READY
+call :SAY SDK_REINSTALL_FAILED
 
 :SDK_REPAIR_MANUAL
-echo.
-echo       To repair it by hand:
-echo         1. Press O to open Settings - Apps - Installed apps
-echo         2. Find  Microsoft .NET SDK 8.0.x (x64) , click ... and choose Modify
-echo         3. Click Repair, wait for it to finish, then come back and press R
-echo.
+call :SAY SDK_REPAIR_MANUAL
 :SDK_REPAIR_WAIT
-choice /c ORQ /n /m "      O = open Installed apps,  R = check again,  Q = quit : "
+call :ASK ASK_SDK_REPAIR ORQ
 if errorlevel 3 exit /b 1
 if errorlevel 2 goto SDK_REPAIR_RECHECK
 start "" "ms-settings:appsfeatures"
 goto SDK_REPAIR_WAIT
 :SDK_REPAIR_RECHECK
 call :FIND_DOTNET
-if defined DOTNET goto SDK_OK
-echo       Still not found. If the repair is still running, wait for it to
-echo       finish and press R again.
+if defined DOTNET goto SDK_READY
+call :SAY SDK_REPAIR_STILL_MISSING
 goto SDK_REPAIR_WAIT
+
+:SDK_READY
+call :SAY SDK_READY
+goto SDK_OK
 
 
 :CONFIG_FAIL
-echo.
-echo [ERROR] Could not create pbibridge_csharp\appsettings.json.
-echo.
-echo         Do it by hand: in the pbibridge_csharp folder, copy
-echo         appsettings.template.json to appsettings.json, then double-click
-echo         this file again.
-echo.
-pause
+call :SAY R_PROBLEM
+call :SAY CONFIG_FAIL
+call :SAY PRESS_CLOSE
+pause >nul
 exit /b 1
 
 
 :LIBS_DECLINED
-echo.
-echo       The server cannot be compiled without these libraries.
-echo       Double-click this file again whenever you are ready.
-echo.
-pause
+call :SAY LIBS_DECLINED
+call :SAY PRESS_CLOSE
+pause >nul
 exit /b 1
 
 
 :RESTORE_FAIL
-echo.
-echo       [ERROR] The download failed.
+call :SAY RESTORE_FAIL
 "%DOTNET%" nuget list source | findstr /i /c:"api.nuget.org" >nul
 if not errorlevel 1 goto RESTORE_NETWORK
-echo.
-echo       Cause: nuget.org is not registered as a package source on this computer.
-choice /c YN /n /m "      Add nuget.org as a package source and try again? [Y/N] "
+call :SAY NUGET_SOURCE_MISSING
+call :ASK ASK_NUGET_SOURCE YN
 if errorlevel 2 goto RESTORE_NETWORK
 "%DOTNET%" nuget add source https://api.nuget.org/v3/index.json -n nuget.org
 goto LIBS_RETRY
 
 :RESTORE_NETWORK
-echo.
-echo       Most likely the network cannot reach nuget.org. Check:
-echo         1. In a browser, open  https://api.nuget.org/v3/index.json
-echo            You should see a page of text.
-echo         2. The browser works but this still fails: usually a company proxy.
-echo            Ask IT for help, or for an internal NuGet package source.
-echo         3. On a VPN? Try again with it switched the other way.
-echo.
-choice /c RQ /n /m "      R = try again,  Q = quit : "
+call :SAY RESTORE_NETWORK
+call :ASK ASK_RESTORE_RETRY RQ
 if errorlevel 2 exit /b 1
 goto LIBS_RETRY
 
 
 :BUILD_FAIL
-echo.
-echo [ERROR] Compile failed - scroll up for the compiler errors.
-echo.
-echo         being used by another process
-echo             Another launcher window is compiling right now.
-echo             Close the extra window, then double-click this file again.
-echo         NU1301
-echo             The libraries could not be downloaded - check the network.
-echo.
-pause
+call :SAY BUILD_FAIL
+call :SAY PRESS_CLOSE
+pause >nul
 exit /b 1
 
 
 :PORT_BUSY
-echo.
-echo [ERROR] Port 5500 is used by a different program.
-echo         VS Code Live Server uses 5500 by default, for example.
-echo         Close that program, then double-click this file again.
-echo.
-pause
+call :SAY PORT_BUSY
+pause >nul
 exit /b 1
+
+
+rem pause is always silent (pause >nul) and the hint comes from the text file:
+rem under code page 65001 pause prints its own prompt in English.
 
 
 rem ===========================================================================
 rem  Subroutines
 rem ===========================================================================
+
+rem Screen text, from tools\launcher-text.txt. A FOR variable is expanded after
+rem cmd has parsed the line, so ampersands, pipes, angle brackets, percent
+rem signs, carets and quotes in the text print as they are. Each call reads the
+rem whole file - it is small, and this needs no extra program.
+:SAY
+for /f "usebackq tokens=1* delims=|" %%A in ("%TEXT%") do if "%%A"=="%~1" echo(%%B
+exit /b 0
+
+rem Stays on the line, for "[1/5] ...... " followed by the result. set /p
+rem drops leading spaces, so these lines start at column 0.
+:SAYN
+for /f "usebackq tokens=1* delims=|" %%A in ("%TEXT%") do if "%%A"=="%~1" <nul set /p "=%%B "
+exit /b 0
+
+rem Shows a one-line question and waits for one of the keys in %2; the answer
+rem comes back as the errorlevel, like choice itself. choice drops leading
+rem spaces too, so those lines are indented with full-width spaces.
+:ASK
+for /f "usebackq tokens=1* delims=|" %%A in ("%TEXT%") do if "%%A"=="%~1" choice /c %~2 /n /m "%%B "
+exit /b %errorlevel%
 
 rem Sets DOTNET to the first dotnet that has an SDK of version 8 or newer.
 rem Checks the fixed install folders too: right after a fresh install, PATH in
@@ -353,27 +349,8 @@ exit /b 0
 :LOCATION_CHECK
 echo "%ROOT%" | findstr /i "OneDrive" >nul
 if errorlevel 1 exit /b 0
-echo.
-echo       [WARNING] This folder is inside OneDrive. Sync can lock files while
-echo       compiling and make it fail at random. A local folder such as
-echo       C:\PBI_AI_Bridge is strongly recommended.
-echo.
-pause
-exit /b 0
-
-
-:PROTECTION_REMINDER
-echo.
-echo       ------------------------------------------------------------------
-echo       IMPORTANT - decide what the AI may read before it queries your data
-echo.
-echo       When the dashboard opens, click the second tab at the top
-echo       (the one with the shield icon), then:
-echo         1. click the orange button to apply all suggestions
-echo         2. look through the list and fix anything that is wrong
-echo         3. press Save
-echo       It takes about a minute. Until then only English column names
-echo       such as customer, amount and price are protected.
-echo       ------------------------------------------------------------------
-echo.
+set "NOTED=1"
+call :SAY R_WARN
+call :SAY ONEDRIVE
+pause >nul
 exit /b 0

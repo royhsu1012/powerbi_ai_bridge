@@ -1,0 +1,215 @@
+# =============================================================================
+#  啟動檔（🚀啟動PBI終極儀表板.bat）畫面上的所有文字
+# =============================================================================
+#  為什麼放在這裡：cmd 以「位元組」定位 .bat 檔，.bat 裡只要出現中文，goto 就可能
+#  跳到某一行的中間，所以 .bat 只能有 ASCII。中文全部放在這一份，.bat 依代號印出。
+#
+#  格式：每一行是「代號|要印出的文字」。同一個代號可以有好幾行，照順序印出；
+#        只有「代號|」的那一行印出空白行。# 開頭的是註解，不會印出來。
+#
+#  排版：
+#    · 步驟行（STEP1 ~ STEP5）從第 0 欄開始，後面由 .bat 接一個空格和結果（R_ 開頭）
+#    · 步驟底下的說明縮排 6 格，條列項目 8 格
+#    · 其餘獨立的訊息（RUNNING、PORT_BUSY、START）縮排 2 格
+#    · 一行不超過 80 格（中文字一個算兩格）
+#
+#  修改時請注意：
+#    · 存檔保持 UTF-8（不要存成 ANSI / Big5）
+#    · 代號要和 .bat 裡的 call :SAY / :SAYN / :ASK 一致。改完跑一次
+#      tools\Test-BridgeClient.ps1，它會檢查代號對不對得上、每行有沒有超過 80 格
+#    · ASK_ 開頭的是提問行：只能有一行、不能有雙引號。choice 會吃掉行首的半形空白，
+#      所以縮排要用全形空白「　」（三個全形空白 = 六格）
+#    · STEP 開頭的只能有一行、不能有雙引號、開頭不能是空白（set /p 會吃掉）
+# =============================================================================
+
+# ── 開頭 ─────────────────────────────────────────────────────────────────────
+BANNER|==================================================
+BANNER|  PBI AI Bridge  啟動程式
+BANNER|==================================================
+BANNER|
+
+RUNNING|  服務已經在另一個視窗執行中，直接幫你打開儀表板。
+RUNNING|  這個視窗 5 秒後會自己關閉。
+
+PORT_BUSY|  [錯誤] Port 5500 被別的程式占用了。
+PORT_BUSY|  例如 VS Code 的 Live Server 預設就是用 5500。
+PORT_BUSY|  請關掉那個程式，再重新雙擊這個啟動檔。
+PORT_BUSY|
+PORT_BUSY|  按任意鍵關閉這個視窗。
+
+# 出錯之後的最後一行。pause 本身的提示在 UTF-8 字碼頁下會變成英文，所以由這裡印
+PRESS_CLOSE|      按任意鍵關閉這個視窗。
+
+# ── 五個步驟與結果 ───────────────────────────────────────────────────────────
+STEP1|[1/5] 檢查檔案 ................
+STEP2|[2/5] .NET SDK ................
+STEP3|[3/5] 設定檔案 ................
+STEP4|[4/5] 相依套件 ................
+STEP5|[5/5] 編譯程式 ................
+
+R_OK|OK
+R_WARN|注意
+R_MISSING|找不到
+R_PROBLEM|有問題
+R_CREATED|第一次使用，已從範本建立
+R_FIRST|第一次使用，需要下載
+R_CACHED|這台電腦已經有了，直接沿用
+R_UPTODATE|已是最新
+R_BUILD|需要編譯，大約 30 秒
+
+# ── [1/5] 檔案 ───────────────────────────────────────────────────────────────
+INCOMPLETE|
+INCOMPLETE|      [錯誤] 這個資料夾少了一些檔案。
+INCOMPLETE|      應該要有 pbibridge_csharp\Program.cs 與 appsettings.template.json。
+INCOMPLETE|
+INCOMPLETE|      你拿到的副本不完整。請重新取得整個資料夾，並且先解壓縮 ——
+INCOMPLETE|      不要直接在壓縮檔裡面執行。
+INCOMPLETE|
+
+ONEDRIVE|
+ONEDRIVE|      [注意] 這個資料夾在 OneDrive 裡面。
+ONEDRIVE|      同步可能會在編譯時鎖住檔案，造成莫名其妙的失敗。
+ONEDRIVE|      強烈建議改放到本機資料夾，例如 C:\PBI_AI_Bridge。
+ONEDRIVE|
+ONEDRIVE|      按任意鍵繼續。
+
+# ── [2/5] .NET SDK ───────────────────────────────────────────────────────────
+SDK_NEEDED|
+SDK_NEEDED|      這個工具需要 .NET SDK 8 以上。
+SDK_NEEDED|      只裝 .NET Runtime 不夠 —— Runtime 不能編譯程式。
+SDK_NEEDED|
+
+SDK_OFFER|      可以直接在這裡用 Windows 內建的安裝工具 winget 安裝：
+SDK_OFFER|        套件    Microsoft .NET SDK 8（代號 Microsoft.DotNet.SDK.8）
+SDK_OFFER|        來源    微軟官方，約 210 MB
+SDK_OFFER|        注意    Windows 可能會問「是否允許此 App 變更你的裝置」，
+SDK_OFFER|                請按「是」
+SDK_OFFER|
+ASK_SDK_INSTALL|　　　現在安裝嗎？[Y/N]
+
+SDK_INSTALL_FAILED|
+SDK_INSTALL_FAILED|      [錯誤] 安裝沒有完成，或是被取消了。
+
+SDK_MANUAL|
+SDK_MANUAL|      手動安裝的步驟：
+SDK_MANUAL|        1. 按 O 打開微軟的下載頁面
+SDK_MANUAL|        2. 在「SDK 8.0.x」那一欄，選 Windows 的 x64 Installer
+SDK_MANUAL|        3. 執行下載的安裝程式，裝好之後回到這個視窗按 R
+SDK_MANUAL|
+ASK_SDK_MANUAL|　　　O = 打開下載頁　R = 重新檢查　Q = 離開：
+
+SDK_STILL_MISSING|      還是找不到。安裝程式如果還在跑，等它跑完再按一次 R。
+
+SDK_BROKEN|      Windows 顯示 .NET SDK 8 已經安裝，但它的檔案不見了。
+SDK_BROKEN|      通常是自動更新做到一半中斷造成的：Windows 以為已經裝好，
+SDK_BROKEN|      所以「再裝一次」不會有任何動作。
+SDK_BROKEN|
+SDK_BROKEN|      可以直接在這裡修好 —— 先移除壞掉的那份，再重新安裝：
+SDK_BROKEN|        套件    Microsoft .NET SDK 8（代號 Microsoft.DotNet.SDK.8）
+SDK_BROKEN|        來源    微軟官方，約 210 MB
+SDK_BROKEN|        注意    Windows 可能會問兩次「是否允許此 App 變更你的裝置」，
+SDK_BROKEN|                兩次都請按「是」
+SDK_BROKEN|
+ASK_SDK_REINSTALL|　　　現在重新安裝嗎？[Y/N]
+
+SDK_REINSTALL_FAILED|
+SDK_REINSTALL_FAILED|      [錯誤] 重新安裝沒有完成，或是被取消了。
+
+SDK_REPAIR_MANUAL|
+SDK_REPAIR_MANUAL|      手動修復的步驟：
+SDK_REPAIR_MANUAL|        1. 按 O 打開「設定 → 應用程式 → 已安裝的應用程式」
+SDK_REPAIR_MANUAL|        2. 找到「Microsoft .NET SDK 8.0.x (x64)」，按右邊的 ⋯ → 修改
+SDK_REPAIR_MANUAL|        3. 在跳出來的視窗按「修復」，等它跑完，再回到這個視窗按 R
+SDK_REPAIR_MANUAL|
+ASK_SDK_REPAIR|　　　O = 打開已安裝的應用程式　R = 重新檢查　Q = 離開：
+
+SDK_REPAIR_STILL_MISSING|      還是找不到。修復如果還在跑，等它跑完再按一次 R。
+
+SDK_READY|
+SDK_READY|      .NET SDK 準備好了，繼續下一步。
+SDK_READY|
+
+# ── [3/5] 設定檔案 ───────────────────────────────────────────────────────────
+CONFIG_CREATED|      設定檔裡沒有金鑰、也沒有密碼。
+CONFIG_CREATED|      API 金鑰由服務第一次啟動時自己產生，存在你的使用者資料夾。
+
+PROTECTION|
+PROTECTION|      ------------------------------------------------------------
+PROTECTION|      重要：讓 AI 查詢資料之前，先決定它能讀哪些欄位
+PROTECTION|
+PROTECTION|      儀表板打開之後，點上方第二個分頁「資料保護」（盾牌圖示），然後：
+PROTECTION|        1. 按「套用全部建議」
+PROTECTION|        2. 看一遍清單，把判斷錯的改過來
+PROTECTION|        3. 按「儲存」
+PROTECTION|      大約一分鐘。設定之前，只有 customer、amount、price 這類
+PROTECTION|      英文欄名受到保護 —— 中文欄名幾乎全部是開放的。
+PROTECTION|      ------------------------------------------------------------
+PROTECTION|
+
+CONFIG_FAIL|
+CONFIG_FAIL|      [錯誤] 無法建立 pbibridge_csharp\appsettings.json。
+CONFIG_FAIL|
+CONFIG_FAIL|      請手動處理：在 pbibridge_csharp 資料夾裡，把 appsettings.template.json
+CONFIG_FAIL|      複製一份、改名成 appsettings.json，然後重新雙擊這個啟動檔。
+CONFIG_FAIL|
+
+# ── [4/5] 相依套件 ───────────────────────────────────────────────────────────
+LIBS_ABOUT|
+LIBS_ABOUT|      需要從 nuget.org 下載 6 個套件，共約 17 MB。
+LIBS_ABOUT|      它們是微軟的 Analysis Services 用戶端程式庫，只需要下載這一次。
+LIBS_ABOUT|
+ASK_LIBS|　　　現在下載嗎？[Y/N]
+
+LIBS_DOWNLOADING|      下載中……
+
+LIBS_DONE|      套件準備好了。
+
+LIBS_DECLINED|
+LIBS_DECLINED|      沒有這些套件就無法編譯服務。
+LIBS_DECLINED|      準備好了再雙擊這個啟動檔就可以。
+LIBS_DECLINED|
+
+RESTORE_FAIL|
+RESTORE_FAIL|      [錯誤] 下載失敗。
+
+NUGET_SOURCE_MISSING|
+NUGET_SOURCE_MISSING|      原因：這台電腦沒有把 nuget.org 登記為套件來源。
+ASK_NUGET_SOURCE|　　　要自動加上 nuget.org 並重試嗎？[Y/N]
+
+RESTORE_NETWORK|
+RESTORE_NETWORK|      最可能的原因是網路連不到 nuget.org。請檢查：
+RESTORE_NETWORK|        1. 用瀏覽器打開 https://api.nuget.org/v3/index.json
+RESTORE_NETWORK|           看得到一整頁文字，就代表連得到
+RESTORE_NETWORK|        2. 瀏覽器打得開、這裡卻還是失敗：通常是公司的 Proxy。
+RESTORE_NETWORK|           請 IT 協助，或向 IT 要公司內部的 NuGet 套件來源
+RESTORE_NETWORK|        3. 有開 VPN 的話，切換一下再試
+RESTORE_NETWORK|
+ASK_RESTORE_RETRY|　　　R = 重試　Q = 離開：
+
+# ── [5/5] 編譯程式 ───────────────────────────────────────────────────────────
+BUILD_DONE|      編譯完成。
+
+BUILD_FAIL|
+BUILD_FAIL|      [錯誤] 編譯失敗 —— 往上捲動可以看到編譯器的錯誤訊息。
+BUILD_FAIL|
+BUILD_FAIL|      常見的兩種：
+BUILD_FAIL|        訊息裡有 MSB3027、MSB3021 或 being used by another process
+BUILD_FAIL|            檔案被占用：通常是另一個啟動檔視窗正在編譯或執行服務。
+BUILD_FAIL|            關掉多出來的視窗，再重新雙擊這個啟動檔。
+BUILD_FAIL|        訊息裡有 NU1301
+BUILD_FAIL|            套件下載不下來 —— 請檢查網路。
+BUILD_FAIL|
+
+# ── 啟動與結束 ───────────────────────────────────────────────────────────────
+START|
+START|  ------------------------------------------------
+START|  服務啟動中，儀表板會自動在瀏覽器打開。
+START|  請保持這個視窗開啟 —— 關掉它，服務就停了。
+START|  儀表板網址：http://localhost:5500/
+START|  ------------------------------------------------
+START|
+
+SERVER_EXIT|
+SERVER_EXIT|  [結束] 服務已經停止。如果不是你關的，往上捲動可以看到原因。
+SERVER_EXIT|
+SERVER_EXIT|  按任意鍵關閉這個視窗。

@@ -16,15 +16,19 @@ PBI_AI_Bridge/
 │   ├── troubleshooting.md         ← 錯誤訊息與狀態碼對照
 │   └── service-development.md     ← 本文件
 ├── 🚀啟動PBI終極儀表板.bat          ← 唯一的啟動檔（自動偵測階段：已在跑就開儀表板 → 缺 SDK／套件時詢問並安裝 → 程式有改才編譯 → 起服務）
-│                                     ⚠️ 只能有 ASCII 字元、行尾必須 CRLF（cmd 以位元組定位，否則 goto 會錯位）
+│                                     ⚠️ 只能有 ASCII 字元、行尾必須 CRLF（cmd 以位元組定位，否則 goto 會錯位）。
+│                                     畫面文字在 tools\launcher-text.txt，.bat 只寫代號（call :SAY 代號）
 ├── PowerBI_Visualizer.html        ← 網頁儀表板：「模型結構」與「資料保護」兩個檢視（使用者在後者逐欄設定 AI 能讀什麼）。
 │                                     由服務在 http://localhost:5500/ 提供並帶入金鑰（直接雙擊會自動轉址）
 ├── API_Documentation.html         ← 端點總覽（網頁版）
 ├── tools/
 │   ├── PBI-Bridge.ps1             ← PowerShell 輔助函式（一律用這個呼叫 API）⚠️ 必須保留 UTF-8 BOM
 │   ├── Test-DataGuard.ps1         ← 資料保護紅隊測試（只回報擋下與否，不印出資料）。要開著服務與 Power BI
-│   └── Test-BridgeClient.ps1      ← 用戶端自我檢查，不需要服務：BOM／控制字元／啟動檔編碼，
+│   ├── Test-BridgeClient.ps1      ← 用戶端自我檢查，不需要服務：BOM／控制字元／啟動檔編碼與畫面文字，
 │                                     以及每個函式送出的請求。**改過 tools\*.ps1、hook 或啟動檔之後一定要跑**
+│   └── launcher-text.txt          ← 啟動檔畫面上的所有中文（UTF-8，「代號|文字」一行一行）。
+│                                     視窗切到 65001 讀它，之後不切回（切碼頁會讓 Windows Terminal 清掉整個畫面）；
+│                                     服務自己判斷：不在 Windows Terminal（沒有 WT_SESSION）就印文字標記，不印 emoji
 ├── pbibridge_csharp/              ← C# 橋接服務
 │   ├── Program.cs                 ← 所有 API 端點與 DataGuard 都在這
 │   ├── appsettings.template.json  ← 設定範本（可分享；啟動檔第一次執行時由它產生 appsettings.json）

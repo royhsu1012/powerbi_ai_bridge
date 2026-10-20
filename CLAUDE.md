@@ -585,7 +585,7 @@ Port 每次開啟都不同，所以那些快照**只在這次開啟期間找得�
 
 完整的專案結構在 README 第 12 節與 `docs\service-development.md`。平常要記得的只有這幾件：
 
-- `tools\*.ps1` 與 `.claude\hooks\*.ps1` 必須保留 **UTF-8 BOM**；`🚀啟動PBI終極儀表板.bat` 只能有 ASCII 字元、行尾必須是 CRLF（不要用 `sed` 改它）
+- `tools\*.ps1` 與 `.claude\hooks\*.ps1` 必須保留 **UTF-8 BOM**；`🚀啟動PBI終極儀表板.bat` 只能有 ASCII 字元、行尾必須是 CRLF（不要用 `sed` 改它）；它畫面上的中文在 `tools\launcher-text.txt`，改文字改那份
 - `%LOCALAPPDATA%\PBI_AI_Bridge\`（API 金鑰與每個模型的保護設定）**整個資料夾都不要讀寫** —— 指令列與檔案工具都有規則在擋，但沒被擋到也不要碰
 - `snapshots\`、`PowerQuery_Scripts\`、`audit\` 是服務自動產生的模型產物，裡面有模型結構、M 腳本與查詢紀錄：不要整份讀進 context，也不要提交到版控
 - **不要在這裡放特定模型的產物**（資料字典、schema 匯出、單一模型的備份）。那種東西會過期，而過期的參考資料比沒有更糟 ——

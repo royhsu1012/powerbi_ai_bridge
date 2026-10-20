@@ -234,25 +234,28 @@ AI 和儀表板用的是同一組 API、同一把金鑰 —— 技術上 AI 叫�
 第一次大概會看到：
 
 ```
-[1/5] Files
-      OK
-[2/5] .NET SDK
-      OK                                    ← 沒有的話會問你要不要安裝（見下方）
-[3/5] Settings file
-      Created from the template. It holds no key and no password.
-      IMPORTANT - decide what the AI may read before it queries your data
-                                            ← 儀表板打開後照第 4 節設定（約一分鐘）
-[4/5] Libraries
-      First run: 6 libraries must be downloaded from nuget.org, about 17 MB.
-      Download them now? [Y/N]              ← 按 Y
-      OK
-[5/5] Compile
-      Compiling, about 30 seconds...
-      OK
-----------------------------------------------
-  Starting - the dashboard opens by itself.
-  KEEP THIS WINDOW OPEN. Closing it stops the server.
-----------------------------------------------
+==================================================
+  PBI AI Bridge  啟動程式
+==================================================
+
+[1/5] 檢查檔案 ................ OK
+[2/5] .NET SDK ................ OK      ← 沒有的話會問你要不要安裝（見下方）
+[3/5] 設定檔案 ................ 第一次使用，已從範本建立
+      設定檔裡沒有金鑰、也沒有密碼。
+      重要：讓 AI 查詢資料之前，先決定它能讀哪些欄位
+                                        ← 儀表板打開後照第 4 節設定（約一分鐘）
+[4/5] 相依套件 ................ 第一次使用，需要下載
+      需要從 nuget.org 下載 6 個套件，共約 17 MB。
+　　　現在下載嗎？[Y/N]                  ← 按 Y
+      套件準備好了。
+[5/5] 編譯程式 ................ 需要編譯，大約 30 秒
+      編譯完成。
+
+  ------------------------------------------------
+  服務啟動中，儀表板會自動在瀏覽器打開。
+  請保持這個視窗開啟 —— 關掉它，服務就停了。
+  ------------------------------------------------
+
 [保護] 資料保護啟用 — 通用規則（依欄名樣式）：只能計數 16 條、只能彙總 7 條、開放 0 條
    逐欄設定：儀表板的「資料保護」分頁（每個模型各一份；放寬時會跳出確認視窗）
 [實例] 偵測到 1 個 Power BI 實例：
@@ -272,7 +275,7 @@ AI 和儀表板用的是同一組 API、同一把金鑰 —— 技術上 AI 叫�
 - 按 **N**，或安裝失敗（例如公司電腦停用了 winget）：畫面會列出手動步驟
   - 按 **O** 開啟下載頁 → 找「SDK 8.0.x」→ Windows **x64** Installer → 安裝（注意是 **SDK**，不是 Runtime）
   - 裝好回到黑窗按 **R** 重新檢查，不用重開；按 **Q** 離開
-- 畫面說 **"Windows lists the .NET SDK 8 as installed, but its files are missing"**：SDK 被自動更新弄壞了 ——
+- 畫面說 **「Windows 顯示 .NET SDK 8 已經安裝，但它的檔案不見了」**：SDK 被自動更新弄壞了 ——
   Windows 以為已經裝好，實際上檔案不見了，所以「再裝一次」不會有任何動作。按 **Y** 會先移除壞掉的那份、再重新安裝
   （約 210 MB，可能跳兩次「是否允許此 App 變更你的裝置」）
   - 按 **N** 或重裝失敗：按 **O** 開啟「設定 → 應用程式 → 已安裝的應用程式」，找到「Microsoft .NET SDK 8.0.x (x64)」→ ⋯ → **修改** → **修復**，
@@ -663,7 +666,8 @@ PBI_AI_Bridge/
 ├── tools/
 │   ├── PBI-Bridge.ps1             PowerShell 輔助函式
 │   ├── Test-DataGuard.ps1         資料保護測試（要開著服務與 Power BI）
-│   └── Test-BridgeClient.ps1      工具自我檢查（不需要服務；改過 .ps1 或啟動檔之後跑）
+│   ├── Test-BridgeClient.ps1      工具自我檢查（不需要服務；改過 .ps1 或啟動檔之後跑）
+│   └── launcher-text.txt          啟動檔畫面上的所有中文（要改黑窗裡的文字改這份）
 ├── pbibridge_csharp/
 │   ├── Program.cs                 所有 API 端點與 DataGuard
 │   ├── pbibridge_csharp.csproj
@@ -698,7 +702,8 @@ PBI_AI_Bridge/
 
 - `tools/*.ps1` 與 `.claude/hooks/*.ps1` 存檔要保留「**UTF-8 with BOM**」，否則 PowerShell 5.1 會把中文讀成亂碼而無法載入
 - hook 腳本讀取輸入時**必須用 UTF-8**；用系統碼頁讀，中文路徑會讓它解析失敗而全部放行
-- `🚀啟動PBI終極儀表板.bat` 只能有**英文字元**、行尾必須是 **CRLF**，否則 cmd 會讀錯位置、跳到錯的標籤
+- `🚀啟動PBI終極儀表板.bat` 只能有**英文字元**、行尾必須是 **CRLF**，否則 cmd 會讀錯位置、跳到錯的標籤。
+  畫面上的中文都在 `tools/launcher-text.txt`（存成 UTF-8），.bat 依代號印出 —— 要改文字改那一份，格式寫在它的開頭
 
 這三件事違反了都不會有明顯的錯誤訊息。改完跑一次 `.\tools\Test-BridgeClient.ps1` —— 它不需要服務也不需要 Power BI，會檢查上面這些，並逐一核對每個指令送出的請求。建置與重啟服務的流程在 `docs\service-development.md`。
 
@@ -714,7 +719,7 @@ PBI_AI_Bridge/
 |---|---|
 | 雙擊 .bat 跳「開啟檔案 - 安全性警告」或「Windows 已保護您的電腦」 | 從網路下載的檔案都會這樣。前者按「執行」，後者按「其他資訊」→「仍要執行」。想以後都不再跳：刪掉解出來的資料夾，在 zip 上按右鍵 → 內容 → 勾「解除封鎖」後重新解壓縮 |
 | 啟動檔找不到 .NET SDK | 按 Y 讓它用 winget 安裝；不行就按 O 手動安裝「.NET SDK 8.x.x」，裝好按 R。見[第 3 節](#如果問你要不要安裝-net-sdk) |
-| 裝了 SDK 還是一直 "Still not found" | SDK 被更新弄壞了（Windows 以為有裝、檔案卻不在）。新版啟動檔會自己認出來並提議重裝；舊版就到「已安裝的應用程式」對「Microsoft .NET SDK 8.0.x」按 修改 → 修復 |
+| 裝了 SDK 還是一直「還是找不到」（舊版是 "Still not found"） | SDK 被更新弄壞了（Windows 以為有裝、檔案卻不在）。新版啟動檔會自己認出來並提議重裝；舊版就到「已安裝的應用程式」對「Microsoft .NET SDK 8.0.x」按 修改 → 修復 |
 | 啟動檔 4/5 下載失敗 | 見[套件下載失敗](#套件下載失敗) |
 | `[WARNING] This folder is inside OneDrive` | 建議把資料夾搬到本機，例如 `C:\PBI_AI_Bridge` |
 | 編譯失敗，訊息有 `being used by another process`（`MSB3027` / `CS2012`） | 同時有兩個啟動檔在編譯。關掉多的黑窗再雙擊一次 |
