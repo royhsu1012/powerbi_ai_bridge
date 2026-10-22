@@ -14,6 +14,7 @@ PBI_AI_Bridge/
 │   ├── power-query.md             ← 讀寫 Power Query（M）的流程
 │   ├── pbip-report-editing.md     ← 直接改 PBIP 報表檔的步驟與踩過的坑
 │   ├── troubleshooting.md         ← 錯誤訊息與狀態碼對照
+│   ├── pbi-pitfalls.md            ← DAX／M／報表檔／PowerShell 的通用坑（症狀 → 原因 → 做法 → 驗法）
 │   └── service-development.md     ← 本文件
 ├── 🚀啟動PBI終極儀表板.bat          ← 唯一的啟動檔（自動偵測階段：已在跑就開儀表板 → 缺 SDK／套件時詢問並安裝 → 程式有改才編譯 → 起服務）
 │                                     ⚠️ 只能有 ASCII 字元、行尾必須 CRLF（cmd 以位元組定位，否則 goto 會錯位）。
@@ -26,6 +27,8 @@ PBI_AI_Bridge/
 │   ├── Test-DataGuard.ps1         ← 資料保護紅隊測試（只回報擋下與否，不印出資料）。要開著服務與 Power BI
 │   ├── Test-BridgeClient.ps1      ← 用戶端自我檢查，不需要服務：BOM／控制字元／啟動檔編碼與畫面文字，
 │                                     以及每個函式送出的請求。**改過 tools\*.ps1、hook 或啟動檔之後一定要跑**
+│   ├── Build-ShareBundle.ps1      ← 打包分享版 zip 到 dist\：白名單複製 → 外洩掃描（命中就不產生 zip，只印檔名:行號:規則）。
+│                                     新增要分享的檔案時加進它的白名單；改過規則跑 -SelfTest。⚠️ 必須保留 UTF-8 BOM
 │   └── launcher-text.txt          ← 啟動檔畫面上的所有中文（UTF-8，「代號|文字」一行一行）。
 │                                     視窗切到 65001 讀它，之後不切回（切碼頁會讓 Windows Terminal 清掉整個畫面）；
 │                                     服務自己判斷：不在 Windows Terminal（沒有 WT_SESSION）就印文字標記，不印 emoji
@@ -41,12 +44,16 @@ PBI_AI_Bridge/
 │                                     那些字串（提交訊息、heredoc 寫文件）也會被擋，那種情況改用 Write／Edit／Grep 工具
 │                                     ⚠️ stdin 必須以 UTF-8 讀取：用系統碼頁（cp950）讀，專案路徑的中文會讓
 │                                        JSON 解析失敗，而腳本解析失敗時是放行 —— hook 會變成全部放行而且毫無徵兆
+│   └── skills/moxa-pbi-style/     ← MOXA 報表風格的 skill（規範、主題檔、PBIR 產生器 MoxaPbirKit.ps1 ⚠️ UTF-8 BOM）。
+│                                     只在報表風格是「MOXA 模式」時用（使用者在儀表板切換，/api/report-style）。
+│                                     公司內部另外提供，不進公開的 GitHub（本機用 .git/info/exclude 排除）
 ├── audit/                         ← 查詢稽核記錄（每月一檔，TSV，服務自動建立）
 │                                     只記查詢文字與判定結果，不記回傳值
 ├── snapshots/                     ← 模型快照，每個模型一個子資料夾（服務自動建立）
 │   └── <檔名>_<路徑雜湊>/
-└── PowerQuery_Scripts/            ← M 腳本備份 (.pq)，Get-PbiMQuery 第一次執行時建立
-    └── <檔名>_<路徑雜湊>/          ← 與 snapshots 相同的命名
+├── PowerQuery_Scripts/            ← M 腳本備份 (.pq)，Get-PbiMQuery 第一次執行時建立
+│   └── <檔名>_<路徑雜湊>/          ← 與 snapshots 相同的命名
+└── dist/                          ← 分享版 zip（Build-ShareBundle.ps1 的輸出，.gitignore 排除）
 
 （專案資料夾之外 —— 整個 %LOCALAPPDATA%\PBI_AI_Bridge\ 都不要用檔案工具或指令去讀寫）
 %LOCALAPPDATA%\PBI_AI_Bridge\api-key.txt
@@ -56,6 +63,9 @@ PBI_AI_Bridge/
                                      只由服務讀寫 —— 不要碰（指令列與檔案工具都有規則在擋，但沒被擋到也不要碰）。
                                      設定跟著「模型」走：先比完整路徑，對不上就靠資料行的固定代號（LineageTag）認，
                                      所以搬家、改名、另存新檔、從 Power BI 裡面開啟都還在
+%LOCALAPPDATA%\PBI_AI_Bridge\report-style.json
+                                   ← 每份報表的報表風格（照原報表／MOXA 模式），使用者在儀表板切換。
+                                     只照完整路徑認（不知道路徑時用視窗標題）：搬家、改名之後回到預設 —— 這只是偏好，不做內容比對
 ```
 
 **不要在這裡放特定模型的產物**（資料字典、schema 匯出、單一模型的備份）。

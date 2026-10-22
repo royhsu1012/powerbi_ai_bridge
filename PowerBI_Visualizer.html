@@ -263,6 +263,10 @@
         .vs:hover { color: var(--text); }
         .vs.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
         .vs.active svg.i { color: var(--accent); }
+        /* 報表風格（照原報表 / MOXA 模式）：同一種分段按鈕，放在工具列 */
+        .stylepick { margin-left: 0; }
+        .stylepick .vs { height: 28px; padding: 0 10px; font-size: 13px; }
+        .stylepick .vs[data-style="moxa"].active { color: #008787; }
         .vs:focus-visible, .seg button:focus-visible, .chip:focus-visible, .ptable > summary:focus-visible,
         .guide > summary:focus-visible, .hint:focus-visible, .skip:focus-visible {
             outline: 2px solid var(--accent); outline-offset: 2px;
@@ -458,6 +462,11 @@
                     <option value="">偵測中…</option>
                 </select>
             </label>
+            <div class="viewswitch stylepick" id="stylePick" role="radiogroup" aria-label="報表風格" hidden
+                 title="AI 幫這份報表做頁面與視覺時用哪一套風格（每份報表各自記住）。照原報表＝沿用既有頁面的寫法；MOXA 模式＝照 MOXA 報表風格">
+                <button class="vs" type="button" role="radio" data-style="default">照原報表</button>
+                <button class="vs" type="button" role="radio" data-style="moxa">MOXA 模式</button>
+            </div>
             <label class="field search-field">
                 <i data-icon="search"></i>
                 <input id="searchInput" type="search" placeholder="搜尋資料表、欄位或量值" autocomplete="off" aria-label="搜尋">
@@ -596,7 +605,8 @@
             });
             $('mainContent').addEventListener('click', onMainClick);
             $('mainContent').addEventListener('toggle', onProtToggle, true);   // toggle 不會往上冒泡，要在捕獲階段接
-            document.querySelectorAll('.vs').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+            document.querySelectorAll('.vs[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+            document.querySelectorAll('#stylePick [data-style]').forEach(b => b.addEventListener('click', () => setReportStyle(b.dataset.style)));
             $('saveBtn').addEventListener('click', saveProtection);
             $('discardBtn').addEventListener('click', () => { pending.clear(); protNotice = null; handleSearch(); });
             $('reviewBtn').addEventListener('click', () => { protFilter = 'changed'; tableOpen.clear(); renderProtection(); });
@@ -645,6 +655,39 @@
             return list;
         }
 
+        // ── 報表風格（照原報表 / MOXA 模式）：AI 做頁面時照哪一套風格，每份報表各記一份 ─────────
+        // 舊版服務沒有這個端點：讀不到就把切換鈕藏起來，其他功能照常
+        async function loadReportStyle() {
+            const box = $('stylePick');
+            try {
+                const res = await fetch('/api/report-style', { headers: apiHeaders() });
+                if (!res.ok) { box.hidden = true; return; }
+                showReportStyle(pick(await res.json(), 'mode', 'Mode'));
+                box.hidden = false;
+            } catch (e) { box.hidden = true; }
+        }
+        function showReportStyle(mode) {
+            document.querySelectorAll('#stylePick [data-style]').forEach(b => {
+                const on = b.dataset.style === (mode || 'default');
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-checked', String(on));
+            });
+        }
+        async function setReportStyle(mode) {
+            try {
+                const res = await fetch('/api/report-style', {
+                    method: 'POST', headers: { ...apiHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }),
+                });
+                if (!res.ok) throw new Error(await readError(res));
+                showReportStyle(pick(await res.json(), 'mode', 'Mode'));
+                showToast(mode === 'moxa'
+                    ? 'MOXA 模式：AI 幫這份報表做頁面與視覺時，照 MOXA 報表風格'
+                    : '照原報表：AI 沿用這份報表既有頁面的寫法', 2600);
+            } catch (e) {
+                showToast('無法切換報表風格：' + e.message, 4000);
+            }
+        }
+
         function setLoading(on) {
             $('refreshBtn').disabled = on;
             $('refreshBtn').querySelector('svg')?.classList.toggle('spin', on);
@@ -667,9 +710,11 @@
                 if (gen !== loadGen) return;         // 等回應的時候使用者又按了一次：讓比較新的那一次接手
                 if (list.length === 0) {
                     tables = []; activeTable = null;
+                    $('stylePick').hidden = true;
                     renderState({ icon: 'plug', title: '沒有偵測到 Power BI', text: '請先開啟一份 .pbix 或 .pbip，再按「重新掃描」。服務不需要重開。' });
                     return;
                 }
+                loadReportStyle();
                 const res = await fetch('/api/schema', { headers: apiHeaders() });
                 if (!res.ok) throw new Error(await readError(res));
                 const data = await res.json();
@@ -924,7 +969,7 @@
         function setView(v) {
             if (v === view) return;
             view = v;                                        // 切換檢視不會丟掉還沒儲存的變更
-            document.querySelectorAll('.vs').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+            document.querySelectorAll('.vs[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === v));
             $('brandSub').textContent = v === 'protection' ? 'AI 能讀什麼' : '模型結構瀏覽';
             $('searchInput').placeholder = v === 'protection' ? '搜尋欄位，例如：客戶、金額' : '搜尋資料表、欄位或量值';
             $('saveBar').hidden = true;

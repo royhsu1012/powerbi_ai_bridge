@@ -490,10 +490,18 @@ AI 和儀表板用的是同一組 API、同一把金鑰 —— 技術上 AI 叫�
 - 改完按下方的「儲存」（改過至少一欄才會出現）。還沒儲存的變更切到另一個檢視也不會不見
 - 分頁上的小圓點代表「還沒設定過」、「有建議還沒處理」或「有變更還沒儲存」
 
+**報表風格（照原報表｜MOXA 模式）** —— 右上角、檔案選單旁邊的切換鈕，決定 AI 幫**這份報表**做頁面與視覺時照哪一套風格：
+
+- **照原報表**（預設）：沿用這份報表既有頁面的版面、配色與字級，新頁面跟其他頁一致
+- **MOXA 模式**：照 MOXA 報表風格做 —— 綠色頁首、KPI 卡列、清單式切片器、綠底標題列、全頁互相篩選、指標說明頁
+  （規範在 `.claude/skills/moxa-pbi-style/`，公司內部另外提供、不在公開版裡 —— 沒放這個資料夾時切到 MOXA 模式也沒有作用。
+  修改既有頁面時只改你要求的地方，不會把整頁改掉）
+- 每份報表各自記住（以檔案路徑認；檔案搬家或改名之後回到預設，再切一次即可）。切換只影響 AI 之後怎麼做，**不會改動報表**
+
 共通：右上角切換 Power BI 檔案、深色／淺色，以及開啟 API 文件。
 **不需要輸入金鑰**：頁面由服務提供並自動帶入。直接雙擊 `PowerBI_Visualizer.html` 也會轉到上面的網址。
 
-儀表板**不會修改你的模型**；它唯一能改的是「AI 能讀哪些欄位」的設定。
+儀表板**不會修改你的模型**；它能改的只有「AI 能讀哪些欄位」與「報表風格」兩項設定。
 
 ---
 
@@ -659,7 +667,7 @@ PBI_AI_Bridge/
 ├── README.md                      本文件
 ├── CLAUDE.md                      AI 工作規範（Claude Code 自動載入）
 ├── AGENTS.md                      其他 AI 代理的入口
-├── docs/                          AI 用到才讀的延伸規範（Power Query、改報表檔、錯誤對照、修改服務）
+├── docs/                          AI 用到才讀的延伸規範（Power Query、改報表檔、錯誤對照、修改服務、通用踩坑）
 ├── 🚀啟動PBI終極儀表板.bat          唯一的啟動檔（自動偵測：安裝／編譯／啟動）
 ├── PowerBI_Visualizer.html        網頁儀表板：模型結構 + 資料保護設定（由服務在 localhost:5500 提供）
 ├── API_Documentation.html         API 端點說明
@@ -667,6 +675,7 @@ PBI_AI_Bridge/
 │   ├── PBI-Bridge.ps1             PowerShell 輔助函式
 │   ├── Test-DataGuard.ps1         資料保護測試（要開著服務與 Power BI）
 │   ├── Test-BridgeClient.ps1      工具自我檢查（不需要服務；改過 .ps1 或啟動檔之後跑）
+│   ├── Build-ShareBundle.ps1      打包分享版 zip（白名單＋外洩掃描，見下方「分享給別人」）
 │   └── launcher-text.txt          啟動檔畫面上的所有中文（要改黑窗裡的文字改這份）
 ├── pbibridge_csharp/
 │   ├── Program.cs                 所有 API 端點與 DataGuard
@@ -675,25 +684,31 @@ PBI_AI_Bridge/
 │   └── appsettings.json           第一次啟動時由範本產生：通用規則等設定（沒有金鑰）
 ├── .claude/
 │   ├── settings.json              Claude Code 的 hook 與權限規則
-│   └── hooks/guard-data-access.ps1
+│   ├── hooks/guard-data-access.ps1
+│   └── skills/moxa-pbi-style/     MOXA 報表風格（儀表板切到「MOXA 模式」時 AI 才會用；公司內部另外提供，不在公開版）
 ├── snapshots/                     模型快照（自動產生）
 ├── PowerQuery_Scripts/            M 腳本備份（自動產生）
-└── audit/                         查詢稽核記錄（自動產生）
+├── audit/                         查詢稽核記錄（自動產生）
+└── dist/                          分享版 zip 的輸出（Build-ShareBundle.ps1 產生）
 ```
 
-**API 金鑰**與每個模型的**逐欄保護設定**都不在這個資料夾裡，存在 `%LOCALAPPDATA%\PBI_AI_Bridge\`（`api-key.txt` 與 `protection\`，見第 3、4 節）—— 複製或分享這個資料夾不會把它們帶出去。
+**API 金鑰**、每個模型的**逐欄保護設定**與**報表風格**都不在這個資料夾裡，存在 `%LOCALAPPDATA%\PBI_AI_Bridge\`（`api-key.txt`、`protection\`、`report-style.json`，見第 3、4、7 節）—— 複製或分享這個資料夾不會把它們帶出去。
 
 ### 分享給別人
 
-最簡單是請對方從 GitHub 下載（Code → Download ZIP），裡面不會有任何你的個人檔案。
-直接複製自己的資料夾或壓 zip 的話，**先刪掉**以下項目（`.gitignore` 已排除，但複製檔案不會）：
+兩種方式，裡面都不會有你的個人檔案：
 
-| 刪掉 | 原因 |
-|---|---|
-| `snapshots/`、`PowerQuery_Scripts/`、`audit/` 的內容 | 你操作過的模型結構、DAX、M 腳本（連線字串）、查詢紀錄 |
-| `pbibridge_csharp/bin/`、`obj/` | 編譯產物，很佔空間；對方的啟動檔會自己編譯 |
+- **從 GitHub 下載**（Code → Download ZIP）
+- **自己打包**：在專案資料夾執行 `.\tools\Build-ShareBundle.ps1`，得到 `dist\PBI_AI_Bridge_<日期>.zip`。
+  它只帶白名單上的檔案，打包後再掃一次有沒有金鑰、連線字串、伺服器位址、email、你的使用者名稱與家目錄路徑 ——
+  掃到就不產生 zip，只列出「檔名:行號」讓你去看（不印內容）。裡面附 `VERSION.txt`（版本、打包時間、檔案清單）。
+  公司內部分享、要連同 MOXA 報表風格一起給：加 `-IncludeMoxaSkill`
 
-想分享調好的**通用規則**（欄名樣式）？把 `pbibridge_csharp/appsettings.json` 留在資料夾裡一起給就行，裡面沒有金鑰。逐欄設定是每台電腦、每份模型各自設的，不隨資料夾分享。
+**不要直接複製資料夾或壓 zip**：資料夾裡有你操作過的模型結構、DAX、M 腳本（含連線字串）與查詢紀錄
+（`snapshots/`、`PowerQuery_Scripts/`、`audit/`）。`.gitignore` 擋得住 GitHub，擋不住複製。
+
+想分享調好的**通用規則**（欄名樣式）？打包不會帶 `pbibridge_csharp/appsettings.json`（那是這台電腦的設定）——
+另外把它傳給對方、請他放進 `pbibridge_csharp/` 就行，裡面沒有金鑰。逐欄設定是每台電腦、每份模型各自設的，不隨資料夾分享。
 
 > 從舊版升級上來的 `appsettings.json` 裡可能還留著一行 `Security` → `ApiKey`（`bin\Release\net8.0\` 裡也有一份副本）。那一把在新版第一次啟動時就失效了，黑窗會提醒你；把那一行刪掉即可。
 
@@ -740,6 +755,8 @@ PBI_AI_Bridge/
 | `目前有 N 個 Power BI 實例在執行` | 告訴 AI 要改哪一個（或 `Use-PbiInstance <檔名片段或 Port>`）。同一份檔案開了兩次也會這樣，關掉多的那個視窗 |
 | 儀表板右上角的檔案顯示「路徑不明」 | 這份檔案是先開 Power BI、再從裡面選的。能做與不能做的事見[第 5 節](#5-每天的使用流程)；要解除限制就關掉 Power BI，改用**雙擊檔案**的方式開啟 |
 | 儀表板顯示「（未開啟檔案）」，或「資料保護」說認不出這份報表 | Power BI 開著但還沒有載入檔案，或是一份還沒存過的空白報表。開啟檔案（或先 Ctrl+S 存檔）後按「重新掃描」 |
+| 右上角沒有「照原報表｜MOXA 模式」切換鈕 | 黑窗裡跑的是舊版服務。關掉黑窗、重新雙擊 🚀（會自動重新編譯） |
+| AI 說「這份模型正在被寫入……等了 30 秒還沒結束」 | 同一份報表上有一個長時間的重新整理或寫入還在跑（例如另一個 AI 視窗正在處理它）。等它做完再試；不同的報表檔互不影響 |
 
 ### 資料保護
 

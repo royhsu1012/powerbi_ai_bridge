@@ -199,6 +199,7 @@
             <a href="#p8"><span class="n">捌</span>進階建模</a>
             <a href="#p9"><span class="n">玖</span>批次</a>
             <a href="#p10"><span class="n">拾</span>資料保護</a>
+            <a href="#p11"><span class="n">拾壹</span>報表風格</a>
         </nav>
 
         <main class="content">
@@ -672,11 +673,32 @@ FROM $SYSTEM.DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS</span>
                     </div>
                 </div>
             </section>
+
+            <section class="part" id="p11">
+                <div class="part-head"><h2><span class="n">拾壹</span>報表風格</h2><span class="sub">照原報表或 MOXA 模式 · 每份報表各一個，由使用者在儀表板切換</span></div>
+                <div class="api-grid">
+                    <div class="api-card">
+                        <div class="badges"><span class="tag get">GET</span></div>
+                        <h3>/api/report-style</h3>
+                        <h4>這份報表做頁面時照哪一套風格</h4>
+                        <p>回傳 <code>mode</code>：<code>default</code> 照原報表（沿用報表既有頁面的寫法，預設）／<code>moxa</code> MOXA 模式（照 <code>.claude/skills/moxa-pbi-style</code>，公司內部另外提供，不在公開版）；另有 <code>file</code> 與可用的 <code>modes</code>。
+                           以完整路徑認報表（不知道路徑時用視窗標題），搬家或改名之後回到預設。</p>
+                    </div>
+                    <div class="api-card">
+                        <div class="badges"><span class="tag post">POST</span></div>
+                        <h3>/api/report-style</h3>
+                        <h4>切換報表風格</h4>
+                        <p>只影響 AI 之後怎麼做頁面，不會改動報表。設定存在 <code>%LOCALAPPDATA%\PBI_AI_Bridge\report-style.json</code>，不跟專案資料夾走。</p>
+                        <span class="code">{ "Mode": "moxa" }      // 或 "default"</span>
+                        <span class="note"><i data-icon="info"></i><span>給 AI 代理：平常由使用者在儀表板切換；使用者明確要求時才用 <code>Set-PbiReportStyle</code> 改。做頁面之前看 <code>Get-PbiOverview</code> 的「報表風格」那一行。</span></span>
+                    </div>
+                </div>
+            </section>
         </main>
     </div>
 
     <footer class="footer">
-        PBI AI Bridge · .NET 8 + TOM（寫入）／ADOMD（查詢）· 39 個 API 端點 · 多實例感知<br>
+        PBI AI Bridge · .NET 8 + TOM（寫入）／ADOMD（查詢）· 41 個 API 端點 · 多實例感知<br>
         PowerShell 封裝見 <code>tools/PBI-Bridge.ps1</code>，工作規範見 <code>CLAUDE.md</code>
     </footer>
 

@@ -33,7 +33,7 @@
 | 檔案 | 內容 |
 |---|---|
 | **`CLAUDE.md`** | 常駐的工作規範（Claude Code 自動載入；其他代理請主動讀取）。這是最權威的一份。 |
-| **`docs\*.md`** | 延伸規範，用到才讀：`power-query.md`、`pbip-report-editing.md`、`troubleshooting.md`、`service-development.md`。 |
+| **`docs\*.md`** | 延伸規範，用到才讀：`power-query.md`、`pbip-report-editing.md`、`troubleshooting.md`、`service-development.md`、`pbi-pitfalls.md`。 |
 | **`README.md`** | 給使用者（人）的完整說明：安裝、啟動、設定 AI 能讀哪些欄位、與 AI 協作時使用者要做的事、疑難排解。 |
 | **`API_Documentation.html`** | 端點總覽。服務開著時也可從 <http://localhost:5500/API_Documentation.html> 開啟。 |
 

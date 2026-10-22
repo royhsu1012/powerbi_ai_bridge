@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Collections.Concurrent;
 using System.Linq;
 using Microsoft.AnalysisServices.Tabular;
 // ⚠️ 只引入需要的型別，不整個命名空間 using：
@@ -58,6 +59,9 @@ namespace PBIBridgeCSharp {
     // 逐欄資料保護設定。Level：open / pseudonym / countOnly / aggregateOnly，或 default（拿掉逐欄設定，回到通用規則）
     public record ProtectionChange(string Table, string Column, string Level);
     public record ProtectionRequest(ProtectionChange[]? Changes, bool? Reset = null);
+
+    // 報表風格（MOXA 模式）
+    public record ReportStyleRequest(string? Mode);
 
     // 快照 / 還原
     public record SnapshotRequest(string Label);
@@ -250,20 +254,24 @@ namespace PBIBridgeCSharp {
         // 查詢與寫入不能交錯。資料保護是先讀模型的定義（量值、計算欄位）來檢查，然後才執行查詢；
         // 兩步之間如果有另一個請求把量值換掉，被檢查的就不是真正執行的那一份。
         // 所以查詢從「讀定義」到「讀完結果」全程拿讀鎖，會改動模型的請求拿寫鎖。
-        static readonly ReaderWriterLockSlim ModelGate = new();
+        // 鎖是每個 Power BI 實例（Port）各一把：要保護的是同一份模型的定義，別份模型的重新整理不必等 ——
+        // 好幾個 session 同時開發不同的報表時，才不會一個重新整理卡住所有人。
+        static readonly ConcurrentDictionary<int, ReaderWriterLockSlim> ModelGates = new();
         const int GateWaitMs = 30_000;
 
         sealed class GateLease : IDisposable {
+            readonly ReaderWriterLockSlim _gate;
             readonly bool _write;
-            public GateLease(bool write) { _write = write; }
-            public void Dispose() { if (_write) ModelGate.ExitWriteLock(); else ModelGate.ExitReadLock(); }
+            public GateLease(ReaderWriterLockSlim gate, bool write) { _gate = gate; _write = write; }
+            public void Dispose() { if (_write) _gate.ExitWriteLock(); else _gate.ExitReadLock(); }
         }
-        static IDisposable EnterGate(bool write) {
-            bool ok = write ? ModelGate.TryEnterWriteLock(GateWaitMs) : ModelGate.TryEnterReadLock(GateWaitMs);
+        static IDisposable EnterGate(int port, bool write) {
+            var gate = ModelGates.GetOrAdd(port, _ => new ReaderWriterLockSlim());
+            bool ok = write ? gate.TryEnterWriteLock(GateWaitMs) : gate.TryEnterReadLock(GateWaitMs);
             if (!ok) throw new OpException(write
-                ? "❌ 有查詢或另一個寫入正在進行，等了 30 秒還沒結束。請稍後再試。"
-                : "❌ 模型正在被寫入（重新整理或套用變更），等了 30 秒還沒結束。請稍後再試。");
-            return new GateLease(write);
+                ? "❌ 這份模型有查詢或另一個寫入正在進行，等了 30 秒還沒結束。請稍後再試。"
+                : "❌ 這份模型正在被寫入（重新整理或套用變更），等了 30 秒還沒結束。請稍後再試。");
+            return new GateLease(gate, write);
         }
 
         /// <summary>
@@ -277,7 +285,7 @@ namespace PBIBridgeCSharp {
                 Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] {label}  →  {inst.FileName ?? "(未命名)"} :{inst.Port}");
                 // 會存檔的才拿寫鎖，擋開正在檢查中的查詢。唯讀與 DryRun 不拿：沒存檔的變更只在這條連線裡，別的查詢看不到。
                 // exclusive 給「save 是 false、但 action 裡面自己會存檔」的呼叫端用（批次的逐步存檔）。
-                using IDisposable? gate = (exclusive ?? save) ? EnterGate(write: true) : null;
+                using IDisposable? gate = (exclusive ?? save) ? EnterGate(inst.Port, write: true) : null;
                 using (var server = new Server()) {
                     server.Connect($"Data Source=localhost:{inst.Port};");
                     var model = server.Databases[0].Model;
@@ -2949,6 +2957,67 @@ namespace PBIBridgeCSharp {
         }
 
         /// <summary>
+        /// 報表風格：AI 做頁面與視覺時照哪一套風格。每份報表各一個，使用者在儀表板上方切換。
+        ///   default ＝ 照原報表（沿用報表既有頁面的寫法）；moxa ＝ MOXA 模式（.claude\skills\moxa-pbi-style）。
+        ///
+        /// 存在 %LOCALAPPDATA%\PBI_AI_Bridge\report-style.json。不是機密，但它是這台電腦使用者的偏好，
+        /// 不該跟著專案資料夾被複製給別人。以完整路徑認報表（不知道路徑時用視窗標題）：
+        /// 檔案搬家或改名之後會回到預設，請使用者再切一次 —— 這只是偏好，認錯的代價比保護設定小得多，所以不做內容比對。
+        /// 檔案讀不出來就當成全部是預設，下次切換時整份重寫。
+        /// </summary>
+        static class ReportStyleStore {
+            public static readonly string[] Modes = { "default", "moxa" };
+            sealed class Item {
+                public string Mode { get; set; } = "default";
+                public string? File { get; set; }
+                public string? SavedAt { get; set; }
+            }
+            static readonly object _lock = new();
+            static Dictionary<string, Item>? _items;
+            static readonly System.Text.Json.JsonSerializerOptions _json = new() {
+                PropertyNameCaseInsensitive = true, WriteIndented = true,
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+
+            static string FilePath => Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PBI_AI_Bridge", "report-style.json");
+
+            static string KeyOf(PbiInstance inst) => !string.IsNullOrEmpty(inst.FilePath)
+                ? "path:" + inst.FilePath.ToLowerInvariant()
+                : "title:" + (inst.FileName ?? "").ToLowerInvariant();
+
+            static Dictionary<string, Item> Items() {
+                if (_items != null) return _items;
+                try {
+                    _items = File.Exists(FilePath)
+                        ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, Item>>(File.ReadAllText(FilePath), _json)
+                        : null;
+                } catch (Exception ex) {
+                    Console.WriteLine($"⚠️ 報表風格設定讀不出來，全部當成預設：{ex.Message}");
+                }
+                _items ??= new Dictionary<string, Item>();
+                return _items;
+            }
+
+            public static string Get(PbiInstance inst) {
+                lock (_lock) return Items().TryGetValue(KeyOf(inst), out var it) && Modes.Contains(it.Mode) ? it.Mode : "default";
+            }
+
+            public static void Set(PbiInstance inst, string mode) {
+                lock (_lock) {
+                    var items = Items();
+                    if (mode == "default") items.Remove(KeyOf(inst));
+                    else items[KeyOf(inst)] = new Item { Mode = mode, File = inst.FilePath ?? inst.FileName, SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") };
+                    Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                    var tmp = FilePath + ".tmp";
+                    File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(items, _json));
+                    File.Move(tmp, FilePath, overwrite: true);
+                }
+            }
+        }
+
+        /// <summary>
         /// 使用者在儀表板「資料保護」分頁替某個模型逐欄設定的等級。
         ///
         /// 存在 %LOCALAPPDATA%\PBI_AI_Bridge\protection\，刻意不放在專案資料夾：
@@ -3952,7 +4021,7 @@ namespace PBIBridgeCSharp {
                     }
 
                     // 從讀模型定義到讀完結果，中間不讓任何寫入插進來（見 ModelGate）
-                    using var gate = EnterGate(write: false);
+                    using var gate = EnterGate(inst.Port, write: false);
                     using (var conn = new AdomdConnection($"Data Source=localhost:{inst.Port};")) {
                         conn.Open();
 
@@ -4303,6 +4372,38 @@ namespace PBIBridgeCSharp {
                     }
                 }
                 return RunAdomd(ctx, req.Query, req.MaxRows, req.TimeoutSeconds, "執行 DMV 查詢");
+            });
+
+            // =====================================================================
+            // 報表風格（MOXA 模式）：每份報表各一個，使用者在儀表板切換（見 ReportStyleStore）
+            // =====================================================================
+
+            app.MapGet("/api/report-style", (HttpContext ctx) => {
+                try {
+                    var inst = ResolveInstance(ctx);
+                    return Results.Ok(new { Mode = ReportStyleStore.Get(inst), File = inst.FilePath ?? inst.FileName, Modes = ReportStyleStore.Modes });
+                } catch (OpException ex) {
+                    return ex.StatusCode == 404 ? Results.NotFound(ex.Message) : Results.BadRequest(ex.Message);
+                } catch (Exception ex) {
+                    return Results.Problem(detail: ex.Message, statusCode: 500);
+                }
+            });
+
+            app.MapPost("/api/report-style", (ReportStyleRequest req, HttpContext ctx) => {
+                string mode = (req.Mode ?? "").Trim().ToLowerInvariant();
+                if (!ReportStyleStore.Modes.Contains(mode))
+                    return Results.BadRequest($"❌ Mode 只接受 {string.Join(" / ", ReportStyleStore.Modes)}");
+                try {
+                    var inst = ResolveInstance(ctx);
+                    ReportStyleStore.Set(inst, mode);
+                    string label = mode == "moxa" ? "MOXA 模式" : "照原報表";
+                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] 報表風格 → {label}  ({inst.FileName ?? "(未命名)"} :{inst.Port})");
+                    return Results.Ok(new { Mode = mode, Message = $"報表風格已切換為「{label}」" });
+                } catch (OpException ex) {
+                    return ex.StatusCode == 404 ? Results.NotFound(ex.Message) : Results.BadRequest(ex.Message);
+                } catch (Exception ex) {
+                    return Results.Problem(detail: ex.Message, statusCode: 500);
+                }
             });
 
             // =====================================================================

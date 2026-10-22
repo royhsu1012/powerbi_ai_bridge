@@ -7,6 +7,9 @@ PBIP 的報表是一堆文字檔：`<名稱>.Report\definition\pages\<頁>\visua
 **Power BI 開著的時候可以直接改這些檔案** —— Desktop 偵測到檔案變動會請使用者接受變更，
 接受之後畫面就換成新的。不用關檔、不殺行程。（使用者 2026-09-24 起實際這樣用。）
 
+**做頁面或視覺之前先看報表風格**：`Get-PbiOverview` 印「報表風格：MOXA 模式」時照 `.claude\skills\moxa-pbi-style`；
+「照原報表」（預設）時照同一份報表既有頁面的寫法。檔案格式的坑見 `docs\pbi-pitfalls.md` 第四節。
+
 這條路沒有 API，改檔案是你自己用腳本做的，所以**安全網也要自己做**：
 
 ```

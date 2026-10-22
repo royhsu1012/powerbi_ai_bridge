@@ -313,6 +313,22 @@ function Get-PbiOverview {
         if ($stale -gt 0) { "   有 $stale 筆設定對不到現在的欄位（改名或刪除了）" }
     }
 
+    # 舊版服務沒有這個端點：讀不到就不提
+    $style = $null
+    try { $style = Get-PbiReportStyle } catch { }
+    if ($style) {
+        if ("$($style.mode)" -eq 'moxa') {
+            # 這份 skill 公司內部另外提供，公開版裡沒有
+            if (Test-Path -LiteralPath (Join-Path (Get-PbiRootPath) '.claude\skills\moxa-pbi-style\SKILL.md')) {
+                "報表風格：MOXA 模式 —— 新頁面與視覺照 .claude\skills\moxa-pbi-style（使用者在儀表板切換）"
+            } else {
+                "報表風格：MOXA 模式，但這台電腦沒有 .claude\skills\moxa-pbi-style（公司內部另外提供）—— 先告訴使用者，在那之前照原報表的風格做"
+            }
+        } else {
+            "報表風格：照原報表 —— 沿用這份報表既有的風格（要用 MOXA 風格，使用者在儀表板切換）"
+        }
+    }
+
     if ($Tables -gt 0 -and $tbl.Count -gt 0) {
         "資料表（資料行／量值／受限的資料行）："
         foreach ($t in ($tbl | Select-Object -First $Tables)) {
@@ -615,6 +631,34 @@ function Set-PbiProtection {
     $changes = @($Column | ForEach-Object { @{ Table = $Table; Column = $_; Level = $Level } })
     # 放寬時伺服器會等使用者回應確認視窗（最多兩分鐘），逾時要比那個長
     Invoke-PbiApi -Path "/api/protection" -Method POST -Body @{ Changes = $changes } -TimeoutSec 180
+}
+
+# ---------------------------------------------------------------------------
+# 報表風格（MOXA 模式）
+# ---------------------------------------------------------------------------
+
+function Get-PbiReportStyle {
+    <#
+      這份報表做頁面與視覺時用哪一套風格。每份報表各自記住，使用者在儀表板上方的「照原報表｜MOXA 模式」切換。
+
+        mode = default  照原報表：沿用這份報表既有頁面的版面、配色、字級（預設）
+        mode = moxa     MOXA 模式：新頁面與視覺照 .claude\skills\moxa-pbi-style
+
+      做頁面、加視覺之前看一眼。Get-PbiOverview 也會印出來。
+    #>
+    Invoke-PbiApi -Path "/api/report-style"
+}
+
+function Set-PbiReportStyle {
+    <#
+      切換這份報表的風格模式。平常由使用者在儀表板切換 —— 使用者明確要求時才用這個。
+
+      範例：
+        Set-PbiReportStyle moxa
+        Set-PbiReportStyle default
+    #>
+    param([Parameter(Mandatory, Position=0)][ValidateSet('default','moxa')][string]$Mode)
+    Invoke-PbiApi -Path "/api/report-style" -Method POST -Body @{ Mode = $Mode }
 }
 
 function Invoke-PbiDmv {
@@ -1164,6 +1208,7 @@ function Get-PbiHelp {
     Write-Host "   讀取  Get-PbiSchema / Get-PbiRelationships / Get-PbiMeasures / Get-PbiRoles / Get-PbiExpressions" -ForegroundColor Gray
     Write-Host "   查詢  Invoke-Dax / Invoke-PbiDmv / Get-PbiModelStats" -ForegroundColor Gray
     Write-Host "   保護  Get-PbiProtection / Set-PbiProtection   ← 每個欄位 AI 讀不讀得到（使用者在儀表板設定）" -ForegroundColor Gray
+    Write-Host "   風格  Get-PbiReportStyle / Set-PbiReportStyle  ← 做頁面時照原報表或 MOXA 模式（使用者在儀表板切換）" -ForegroundColor Gray
     Write-Host "   PQ    Get-PbiMQuery / Set-PbiMQuery / Get-PbiTableProfile / Compare-PbiTableProfile" -ForegroundColor Gray
     Write-Host "   安全  New-PbiSnapshot / Get-PbiSnapshots / Restore-PbiSnapshot" -ForegroundColor Gray
     Write-Host "   生效  Save-PbiModel / Invoke-PbiRefresh" -ForegroundColor Gray

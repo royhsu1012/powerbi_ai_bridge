@@ -30,3 +30,6 @@ pbi_schema_data.js
 snapshots/
 PowerQuery_Scripts/
 audit/
+
+# 分享版 zip 的輸出（tools\Build-ShareBundle.ps1）
+dist/

@@ -410,6 +410,11 @@ $null = Set-PbiProtection -Table '客戶' -Column '電話', '地址' -Level pseu
 Check 'Set-PbiProtection：多個欄位各一筆變更' ($script:Calls[$script:Calls.Count - 1].Json.Changes.Count -eq 2) ""
 Expect-Throw Set-PbiProtection '不認得的等級 → 本機先擋下' { Set-PbiProtection -Table T -Column c -Level readable }
 
+# ── 報表風格（MOXA 模式）────────────────────────────────────────────────────
+Expect-Call  Get-PbiReportStyle '端點' { Get-PbiReportStyle } '/api/report-style'
+Expect-Call  Set-PbiReportStyle '送出模式' { Set-PbiReportStyle moxa } '/api/report-style' -Has @{ Mode = 'moxa' }
+Expect-Throw Set-PbiReportStyle '不認得的模式 → 本機先擋下' { Set-PbiReportStyle fancy }
+
 # ── 資料表剖析（改 M 前後的量化比對）─────────────────────────────────────────
 $script:Covered['Get-PbiTableProfile']     = $true
 $script:Covered['Compare-PbiTableProfile'] = $true
@@ -593,13 +598,16 @@ Check 'Get-PbiOverview：各等級的欄數，並提醒「還沒設定過」與�
     $o.Contains('開放 2／換成代號 1／只能計數 1／只能彙總 0') -and $o.Contains('還沒設定過') -and $o.Contains('路徑不明')) $o
 Check 'Get-PbiOverview：不輸出 M 腳本、公式與引擎的錯誤訊息' (
     -not $o.Contains('機密連線字串') -and -not $o.Contains('COUNTROWS') -and -not $o.Contains('語法錯誤')) ""
+Check 'Get-PbiOverview：報表風格沒設過 → 照原報表' ($o.Contains('報表風格：照原報表') -and -not $o.Contains('MOXA 模式')) $o
 
 $script:Canned['/api/protection'].configured = $true
 $script:Canned['/api/protection'].inheritedFrom = 'C:\舊位置\週報.pbix'
+$script:Canned['/api/report-style'] = [PSCustomObject]@{ mode = 'moxa' }
 $o = @(Get-PbiOverview -Tables 1) -join "`n"
 Check 'Get-PbiOverview：設定是靠內容認回來的時候會講；-Tables 限制清單長度' (
     $o.Contains('C:\舊位置\週報.pbix') -and -not $o.Contains('還沒設定過') -and
     $o.Contains('還有 1 張') -and -not $o.Contains('訂單：')) $o
+Check 'Get-PbiOverview：MOXA 模式時指向 moxa-pbi-style' ($o.Contains('報表風格：MOXA 模式') -and $o.Contains('moxa-pbi-style')) $o
 
 $script:Canned['/api/instances'] = [PSCustomObject]@{ Instances = @($one, $two) }
 $n = $script:Calls.Count
@@ -613,7 +621,7 @@ Check 'Get-PbiOverview：給了目標 → 先選定那一個再讀' (
     $script:PbiTarget -eq '52222' -and $o.Contains('銷售預測.pbip') -and $o.Contains('C:\b\銷售預測.pbip') -and
     -not $o.Contains('路徑不明')) $o
 $null = Use-PbiInstance 6>$null
-foreach ($p in '/api/instances', '/api/schema', '/api/validate', '/api/protection') { $script:Canned.Remove($p) }
+foreach ($p in '/api/instances', '/api/schema', '/api/validate', '/api/protection', '/api/report-style') { $script:Canned.Remove($p) }
 
 # =============================================================================
 # ③ 涵蓋率：PBI-Bridge.ps1 裡的每個函式都要有人管
