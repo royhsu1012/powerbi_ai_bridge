@@ -399,6 +399,22 @@ Check 'Get-PbiProtection：預設只列受限的欄位' (
 Check 'Get-PbiProtection：-All 列出全部，-Table 可以過濾' (
     @(Get-PbiProtection -All).Count -eq 4 -and @(Get-PbiProtection -All -Table '訂單').Count -eq 2) ""
 Check 'Get-PbiProtection：-Raw 回傳伺服器的原始回應' ((Get-PbiProtection -Raw).summary.countOnly -eq 1) ""
+# 使用者在儀表板按了「一鍵關閉保護」：每一欄都是 open、source 是 allOpen、underlying 是恢復後的等級
+$script:Canned['/api/protection'] = [PSCustomObject]@{
+    enabled = $true; problem = $null; allOpen = $true; allOpenSince = '2026-10-23 14:20:00'
+    summary = [PSCustomObject]@{ open = 2; countOnly = 0; pseudonym = 0; aggregateOnly = 0 }
+    underlyingSummary = [PSCustomObject]@{ open = 1; countOnly = 1; pseudonym = 0; aggregateOnly = 0 }
+    tables = @(
+        [PSCustomObject]@{ name = '客戶'; columns = @(
+            [PSCustomObject]@{ name = '客戶名稱'; dataType = 'String'; level = 'open'; source = 'allOpen'; rule = $null; underlying = 'countOnly'; underlyingSource = 'explicit' },
+            [PSCustomObject]@{ name = '地區';     dataType = 'String'; level = 'open'; source = 'allOpen'; rule = $null; underlying = 'open';      underlyingSource = 'default' }) })
+}
+$w = @(Get-PbiProtection 3>&1 | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+Check 'Get-PbiProtection：全開放時提出警告，預設清單沒有受限的欄位' (
+    $w.Count -eq 1 -and "$($w[0].Message)".Contains('全開放') -and @(Get-PbiProtection 3>$null).Count -eq 0) "警告：$($w.Count) 則"
+$a = @(Get-PbiProtection -All 3>$null)
+Check 'Get-PbiProtection：全開放時 -All 多一欄 Underlying（恢復後的等級）' (
+    $a.Count -eq 2 -and $a[0].Level -eq 'open' -and $a[0].Source -eq 'allOpen' -and $a[0].Underlying -eq 'countOnly') ""
 $script:Canned.Remove('/api/protection')
 $script:Covered['Set-PbiProtection'] = $true
 $null = Set-PbiProtection -Table '客戶' -Column '電話' -Level countOnly
@@ -608,6 +624,18 @@ Check 'Get-PbiOverview：設定是靠內容認回來的時候會講；-Tables �
     $o.Contains('C:\舊位置\週報.pbix') -and -not $o.Contains('還沒設定過') -and
     $o.Contains('還有 1 張') -and -not $o.Contains('訂單：')) $o
 Check 'Get-PbiOverview：MOXA 模式時指向 moxa-pbi-style' ($o.Contains('報表風格：MOXA 模式') -and $o.Contains('moxa-pbi-style')) $o
+
+# 使用者按了「一鍵關閉保護」：要講明是他關的、恢復後幾欄受限，而且不再提醒「還沒設定過」
+$script:Canned['/api/protection'] | Add-Member -NotePropertyName allOpen -NotePropertyValue $true -Force
+$script:Canned['/api/protection'] | Add-Member -NotePropertyName allOpenSince -NotePropertyValue '2026-10-23 14:20:00' -Force
+$script:Canned['/api/protection'] | Add-Member -NotePropertyName underlyingSummary -Force `
+    -NotePropertyValue ([PSCustomObject]@{ open = 2; countOnly = 1; pseudonym = 1; aggregateOnly = 0 })
+$script:Canned['/api/protection'].configured = $false
+$o = @(Get-PbiOverview) -join "`n"
+Check 'Get-PbiOverview：全開放時講明是使用者關的、恢復後幾欄受限，不再提醒「還沒設定過」' (
+    $o.Contains('全開放') -and $o.Contains('2026-10-23 14:20') -and $o.Contains('2 欄受限') -and
+    $o.Contains('C:\舊位置\週報.pbix') -and -not $o.Contains('還沒設定過')) $o
+$script:Canned['/api/protection'].allOpen = $false
 
 $script:Canned['/api/instances'] = [PSCustomObject]@{ Instances = @($one, $two) }
 $n = $script:Calls.Count

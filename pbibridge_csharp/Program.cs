@@ -59,6 +59,9 @@ namespace PBIBridgeCSharp {
     // 逐欄資料保護設定。Level：open / pseudonym / countOnly / aggregateOnly，或 default（拿掉逐欄設定，回到通用規則）
     public record ProtectionChange(string Table, string Column, string Level);
     public record ProtectionRequest(ProtectionChange[]? Changes, bool? Reset = null);
+    // 整個模型的保護一鍵關閉（全開放）／恢復。AllOpen：true 關閉、false 恢復。
+    //   Ticket  儀表板在使用者看過說明之後拿到的一次性票；從 API 用戶端送來的請求用不到它（會改走確認視窗）
+    public record AllOpenRequest(bool? AllOpen, string? Ticket = null);
 
     // 報表風格（MOXA 模式）
     public record ReportStyleRequest(string? Mode);
@@ -2512,9 +2515,17 @@ namespace PBIBridgeCSharp {
                 readonly Dictionary<string, Level> _explicit;
                 readonly Derivations? _model;
 
-                public Policy(Dictionary<string, Level>? explicitLevels, Derivations? model) {
+                /// <summary>
+                /// 使用者在儀表板把這個模型的保護整個關掉了（全開放）：每一欄都當成「開放」，逐欄設定與通用規則暫停生效。
+                /// 只影響欄位等級 —— 列數上限、整個不能用的寫法（TOCSV、INFO.*）、DMV 白名單照舊。
+                /// 逐欄設定還留在設定檔裡，恢復保護時原樣回來（見 ProtectionStore.Match.AllOpen）。
+                /// </summary>
+                public bool AllOpen { get; }
+
+                public Policy(Dictionary<string, Level>? explicitLevels, Derivations? model, bool allOpen = false) {
                     _explicit = explicitLevels ?? new Dictionary<string, Level>();
                     _model    = model;
+                    AllOpen   = allOpen;
                 }
 
                 public static string Key(string table, string column) =>
@@ -2536,8 +2547,15 @@ namespace PBIBridgeCSharp {
                 bool? IsNumeric(string table, string column) =>
                     _model != null && _model.Catalog.TryGetValue(table, out var cols) && cols.TryGetValue(column, out var n) ? n : null;
 
-                /// <summary>模型裡的某一欄的等級，以及這個等級是誰決定的。</summary>
+                /// <summary>模型裡的某一欄的等級，以及這個等級是誰決定的（全開放時 source 是 allOpen）。</summary>
                 public Level OfColumn(string table, string column, out string source, out string? rule) {
+                    if (AllOpen) { source = "allOpen"; rule = null; return Level.Open; }
+                    return UnderlyingOfColumn(table, column, out source, out rule);
+                }
+                public Level OfColumn(string table, string column) => OfColumn(table, column, out _, out _);
+
+                /// <summary>不管全開放的旗標，這一欄照逐欄設定與通用規則算出來的等級 —— 恢復保護之後會回到的等級。</summary>
+                public Level UnderlyingOfColumn(string table, string column, out string source, out string? rule) {
                     bool? numeric = IsNumeric(table, column);
                     if (_explicit.TryGetValue(Key(table, column), out var set)) {
                         source = "explicit"; rule = null;
@@ -2548,7 +2566,6 @@ namespace PBIBridgeCSharp {
                     source = rule != null ? "pattern" : "default";
                     return level;
                 }
-                public Level OfColumn(string table, string column) => OfColumn(table, column, out _, out _);
 
                 /// <summary>
                 /// 查詢文字或結果欄位裡的一個參考，適用哪個等級。
@@ -2557,6 +2574,7 @@ namespace PBIBridgeCSharp {
                 ///   · 模型裡沒有這個欄名（別名、查詢自己定義的欄位）→ 只看通用樣式
                 /// </summary>
                 public Level Resolve(string? table, string column) {
+                    if (AllOpen) return Level.Open;
                     if (_model != null && _model.CatalogLoaded) {
                         if (table != null && _model.Catalog.TryGetValue(table, out var cols) && cols.ContainsKey(column))
                             return OfColumn(table, column);
@@ -3048,6 +3066,11 @@ namespace PBIBridgeCSharp {
                 public string? SavedAt { get; set; }
                 public List<string> Signature { get; set; } = new();     // 模型裡一部分資料行的固定代號，用來認模型
                 public List<Entry> Columns { get; set; } = new();
+                // 使用者在儀表板按了「一鍵關閉保護」（全開放）。記的是當時這份模型的身分（見 Match.Identity）：
+                // 只有同一個身分再打開時才算數 —— 另存新檔、搬家、改名之後要重新按，別份模型靠內容認過來的也不沿用。
+                // 逐欄設定（Columns）原樣留著，恢復保護時直接回來。
+                public string? AllOpenFor   { get; set; }
+                public string? AllOpenSince { get; set; }
             }
             /// <summary>讀進記憶體的一份設定檔。</summary>
             public sealed class Loaded {
@@ -3055,13 +3078,19 @@ namespace PBIBridgeCSharp {
                 public List<Entry> Entries = new();
                 public HashSet<string> Tags = new(StringComparer.OrdinalIgnoreCase);    // Signature 加上每筆設定的固定代號
                 public string? Problem, SavedAt, File;
+                public string? AllOpenFor, AllOpenSince;
             }
             /// <summary>這份模型對到的設定。</summary>
             public sealed class Match {
                 public Loaded? File;            // null＝這份模型沒有設定過
                 public string  Key = "";        // 要讀寫的檔名（不含副檔名）；空字串＝沒有任何東西可以認這份模型，存不了
                 public bool    Exact;           // 照完整路徑（或在沒有固定代號可比時照名稱）對上的；false＝靠內容認出來的
+                public string  Identity = "";   // 這次打開的這份模型的身分：有路徑就是路徑的代號，沒有就是「名稱＋資料行代號」
                 public string? Problem => File?.Problem;
+                /// <summary>使用者把這個模型的保護整個關掉了，而且是對「現在這一份」關的。</summary>
+                public bool AllOpen => File != null && File.Problem == null && Identity.Length > 0
+                                    && string.Equals(File.AllOpenFor, Identity, StringComparison.OrdinalIgnoreCase);
+                public string? AllOpenSince => AllOpen ? File!.AllOpenSince : null;
                 /// <summary>
                 /// 靠內容認出來的設定，只照固定代號套用，不照「表名＋欄名」。
                 /// 內容相符只代表兩份模型有共同的來源；名稱一樣的欄位未必是同一欄 ——
@@ -3100,7 +3129,9 @@ namespace PBIBridgeCSharp {
             }
 
             static Loaded ToLoaded(string key, FileShape shape) {
-                var l = new Loaded { Key = key, Entries = shape.Columns, SavedAt = shape.SavedAt, File = shape.File };
+                var l = new Loaded { Key = key, Entries = shape.Columns, SavedAt = shape.SavedAt, File = shape.File,
+                                     AllOpenFor = string.IsNullOrWhiteSpace(shape.AllOpenFor) ? null : shape.AllOpenFor,
+                                     AllOpenSince = shape.AllOpenSince };
                 foreach (var t in shape.Signature) if (!string.IsNullOrWhiteSpace(t)) l.Tags.Add(t);
                 foreach (var e in shape.Columns) if (!string.IsNullOrWhiteSpace(e.Tag)) l.Tags.Add(e.Tag!);
                 return l;
@@ -3119,7 +3150,8 @@ namespace PBIBridgeCSharp {
                             throw new InvalidDataException($"有一筆設定看不懂（{e.Table}[{e.Column}] = {e.Level}）");
                     }
                     // 印出來讓使用者看得到：設定只該由確認過的儲存改動，筆數或時間對不上就是有人直接動過檔案
-                    Console.WriteLine($"🛡️ 已載入逐欄保護設定「{key}」：{shape.Columns.Count} 筆（上次儲存 {shape.SavedAt ?? "不明"}）");
+                    Console.WriteLine($"🛡️ 已載入逐欄保護設定「{key}」：{shape.Columns.Count} 筆（上次儲存 {shape.SavedAt ?? "不明"}）"
+                                    + (string.IsNullOrWhiteSpace(shape.AllOpenFor) ? "" : $" —— 保護已由使用者關閉（全開放，自 {shape.AllOpenSince ?? "不明"}）"));
                     return ToLoaded(key, shape);
                 } catch (Exception ex) {
                     Console.WriteLine($"⚠️ 保護設定檔讀取失敗：{path} —— {ex.Message}");
@@ -3152,7 +3184,8 @@ namespace PBIBridgeCSharp {
                         model != null && model.CatalogLoaded ? model.TagToColumn.Keys : Enumerable.Empty<string>(),
                         StringComparer.OrdinalIgnoreCase);
 
-                    // 沒設定過的話，新的設定檔要叫什麼
+                    // 沒設定過的話，新的設定檔要叫什麼。這個字串同時是這份模型「這次打開」的身分（Match.Identity）：
+                    // 同一條路徑、或同一個名稱＋同一批資料行代號，才是同一個身分
                     string newKey = pathKey
                         ?? (name.Length == 0 && mine.Count == 0 ? ""
                             : (name.Length > 0 ? name : "untitled") + "_"
@@ -3160,7 +3193,7 @@ namespace PBIBridgeCSharp {
 
                     // ① 完整路徑對得上的那一份
                     if (pathKey != null && _files.TryGetValue(pathKey, out var byPath))
-                        return new Match { File = byPath, Key = byPath.Key, Exact = true };
+                        return new Match { File = byPath, Key = byPath.Key, Exact = true, Identity = newKey };
 
                     // ② 靠內容認
                     Loaded? best = null;
@@ -3169,7 +3202,7 @@ namespace PBIBridgeCSharp {
                         bool sameName = name.Length > 0 && f.Key.StartsWith(name + "_", StringComparison.OrdinalIgnoreCase);
                         // 讀不出來的檔案看不到內容，只能照檔名認。寧可多擋：同名的報表在重設之前都查不了
                         if (f.Problem != null) {
-                            if (sameName) return new Match { File = f, Key = f.Key };
+                            if (sameName) return new Match { File = f, Key = f.Key, Identity = newKey };
                             continue;
                         }
                         bool hit, exact = false;
@@ -3182,7 +3215,7 @@ namespace PBIBridgeCSharp {
                         if (!hit) continue;
                         if (best == null || string.CompareOrdinal(f.SavedAt ?? "", best.SavedAt ?? "") > 0) { best = f; bestExact = exact; }
                     }
-                    return new Match { File = best, Key = best?.Key ?? newKey, Exact = bestExact };
+                    return new Match { File = best, Key = best?.Key ?? newKey, Exact = bestExact, Identity = newKey };
                 }
             }
 
@@ -3231,13 +3264,22 @@ namespace PBIBridgeCSharp {
                 return map;
             }
 
-            public static bool Same(List<Entry> a, List<Entry> b) {
-                static IEnumerable<string> Lines(List<Entry> l) =>
-                    l.Select(e => $"{e.Tag}\u0001{e.Table}\u0001{e.Column}\u0001{e.Level}".ToUpperInvariant()).OrderBy(s => s, StringComparer.Ordinal);
-                return Lines(a).SequenceEqual(Lines(b));
+            static IEnumerable<string> EntryLines(List<Entry> l) =>
+                l.Select(e => $"{e.Tag}\u0001{e.Table}\u0001{e.Column}\u0001{e.Level}".ToUpperInvariant()).OrderBy(s => s, StringComparer.Ordinal);
+
+            public static bool Same(List<Entry> a, List<Entry> b) => EntryLines(a).SequenceEqual(EntryLines(b));
+
+            /// <summary>這一批設定的指紋（順序無關）。儀表板「一鍵關閉保護」的票用它綁住看過說明當時的設定。</summary>
+            public static string Fingerprint(List<Entry> entries) {
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                return Convert.ToHexString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", EntryLines(entries)))));
             }
 
-            public static Loaded Save(PbiInstance inst, DataGuard.Derivations? model, Match match, List<Entry> entries) {
+            /// <summary>「全開放」旗標要怎麼存：On＝對現在這份模型關閉保護、Off＝清掉、Keep＝照設定檔原本的。</summary>
+            public enum AllOpenChange { Keep, On, Off }
+
+            public static Loaded Save(PbiInstance inst, DataGuard.Derivations? model, Match match, List<Entry> entries,
+                                      AllOpenChange allOpen = AllOpenChange.Keep) {
                 if (match.Key.Length == 0) throw new OpException(NoIdentityMessage);
                 lock (_lock) {
                     Directory.CreateDirectory(Folder);
@@ -3246,12 +3288,17 @@ namespace PBIBridgeCSharp {
                     if (match.File != null && match.File.Problem == null) signature.AddRange(match.File.Tags);
                     if (model != null && model.CatalogLoaded)
                         signature.AddRange(model.TagToColumn.Keys.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).Take(64));
+                    string? openFor   = match.File?.Problem == null ? match.File?.AllOpenFor   : null;
+                    string? openSince = match.File?.Problem == null ? match.File?.AllOpenSince : null;
+                    if (allOpen == AllOpenChange.On)  { openFor = match.Identity; openSince = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"); }
+                    if (allOpen == AllOpenChange.Off) { openFor = null; openSince = null; }
                     var shape = new FileShape {
                         File = inst.FilePath ?? inst.FileName,
                         SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                         Signature = signature.Distinct(StringComparer.OrdinalIgnoreCase).Take(256).ToList(),
                         Columns = entries.OrderBy(e => e.Table, StringComparer.OrdinalIgnoreCase)
-                                         .ThenBy(e => e.Column, StringComparer.OrdinalIgnoreCase).ToList()
+                                         .ThenBy(e => e.Column, StringComparer.OrdinalIgnoreCase).ToList(),
+                        AllOpenFor = openFor, AllOpenSince = openSince
                     };
                     // 先寫到旁邊再換過去：寫到一半斷掉不會留下半個檔案（那會被當成「讀不出來」而擋下所有查詢）
                     string path = PathFor(match.Key), tmp = path + ".tmp";
@@ -3401,6 +3448,104 @@ namespace PBIBridgeCSharp {
                 Answer.Busy => 5,
                 _ => Math.Clamp((int)Math.Ceiling((_refuseUntil - DateTime.UtcNow).TotalSeconds), 1, CooldownSeconds)
             };
+        }
+
+        /// <summary>
+        /// 儀表板專用的放寬動作（一鍵關閉整個模型的保護）要分辨「是使用者在瀏覽器裡按的」還是「API 用戶端送的」。
+        ///
+        /// 金鑰分不出這兩者（儀表板與 AI 用同一把）。分得出的是瀏覽器自己帶、網頁腳本改不了的來源標頭
+        /// （Sec-Fetch-Site / Sec-Fetch-Dest / Origin / Referer）：同源頁面送出的 fetch 才會長這樣；
+        /// tools\PBI-Bridge.ps1 與任何正常的 API 用戶端都不會帶 —— 要帶就得刻意偽裝成瀏覽器，那不是「悄悄」。
+        /// 這一關只是第一層；還要有看過說明的票（OpenTickets）與人在儀表板前面（HumanPresence），
+        /// 三樣都成立才直接套用，任何一樣不成立就退回 Windows 確認視窗（HumanConfirm），和 API 放寬一樣。
+        ///
+        /// 這不是密碼學上的證明：一個刻意偽造標頭、又剛好在使用者看著儀表板時送出的程式擋不住。擋得住的是
+        /// 「AI 透過這個端點悄悄把保護關掉」：它得偽裝成瀏覽器、hook 會攔下指令列上出現這些字串的指令，稽核與黑窗都會記下來源。
+        /// </summary>
+        static class DashboardRequest {
+            static readonly string[] PagePaths = { "/", "/PowerBI_Visualizer.html" };
+
+            public static bool IsFromDashboard(HttpContext ctx, out string why) {
+                var h = ctx.Request.Headers;
+                string origin = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                if (!h["Sec-Fetch-Site"].ToString().Equals("same-origin", StringComparison.OrdinalIgnoreCase)) { why = "不是同源頁面送出的（Sec-Fetch-Site）"; return false; }
+                if (!h["Sec-Fetch-Dest"].ToString().Equals("empty", StringComparison.OrdinalIgnoreCase)) { why = "不是頁面腳本的 fetch（Sec-Fetch-Dest）"; return false; }
+                string mode = h["Sec-Fetch-Mode"].ToString();
+                if (!mode.Equals("cors", StringComparison.OrdinalIgnoreCase) && !mode.Equals("same-origin", StringComparison.OrdinalIgnoreCase)) { why = "不是頁面腳本的 fetch（Sec-Fetch-Mode）"; return false; }
+                if (!h.Origin.ToString().Equals(origin, StringComparison.OrdinalIgnoreCase)) { why = "Origin 不是本服務"; return false; }
+                if (!Uri.TryCreate(h.Referer.ToString(), UriKind.Absolute, out var referer)
+                    || !referer.GetLeftPart(UriPartial.Authority).Equals(origin, StringComparison.OrdinalIgnoreCase)
+                    || !PagePaths.Contains(referer.AbsolutePath, StringComparer.OrdinalIgnoreCase)) { why = "Referer 不是儀表板頁面"; return false; }
+                if (!h.UserAgent.ToString().Contains("Mozilla/", StringComparison.Ordinal)) { why = "User-Agent 不像瀏覽器"; return false; }
+                why = ""; return true;
+            }
+        }
+
+        /// <summary>
+        /// 使用者是不是「剛剛」在儀表板的「資料保護」頁按了東西：最前面的視窗標題是那一頁，而且幾秒內有鍵盤或滑鼠動作。
+        /// 從 API 送來、偽裝成瀏覽器的請求，要剛好碰上使用者正看著那一頁才過得了這一關。
+        /// 檢查不過不是拒絕，是退回 Windows 確認視窗 —— 使用者在別的瀏覽器視窗、或系統讀不到前景視窗時，還是按得到「是」。
+        /// </summary>
+        static class HumanPresence {
+            [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+            [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+            [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+            /// <summary>儀表板在「資料保護」檢視時的頁面標題（PowerBI_Visualizer.html 的 setView 會設），瀏覽器會把它放進視窗標題。</summary>
+            public const string DashboardTitleMark = "資料保護 · PBI AI Bridge";
+            public const int RecentInputSeconds = 8;
+
+            public static bool AtDashboard(out string why) {
+                try {
+                    var hwnd = GetForegroundWindow();
+                    if (hwnd == IntPtr.Zero) { why = "沒有前景視窗"; return false; }
+                    var sb = new System.Text.StringBuilder(512);
+                    GetWindowTextW(hwnd, sb, sb.Capacity);
+                    string title = sb.ToString();
+                    if (!title.Contains(DashboardTitleMark, StringComparison.Ordinal)) {
+                        why = $"最前面的視窗不是儀表板的「資料保護」頁，是「{OneLine(title, 60)}」"; return false;
+                    }
+                    var lii = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+                    if (!GetLastInputInfo(ref lii)) { why = "讀不到最近一次輸入的時間"; return false; }
+                    uint idleMs = unchecked((uint)Environment.TickCount - lii.dwTime);
+                    if (idleMs > RecentInputSeconds * 1000) { why = $"最近 {idleMs / 1000} 秒沒有鍵盤或滑鼠動作"; return false; }
+                    why = ""; return true;
+                } catch (Exception ex) {
+                    why = "無法檢查前景視窗：" + ex.Message; return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 儀表板「一鍵關閉保護」的一次性票：看過說明（會影響幾欄、哪些）才拿得到，綁著當時的設定，
+        /// 幾分鐘內有效、用一次就作廢。沒有票就代表沒有經過「先說明、再確認」那一步。
+        /// </summary>
+        static class OpenTickets {
+            public const int LifetimeSeconds = 180;
+            static readonly ConcurrentDictionary<string, (string Scope, DateTime Expires)> _tickets = new();
+
+            public static string Issue(string scope) {
+                Sweep();
+                string id = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+                _tickets[id] = (scope, DateTime.UtcNow.AddSeconds(LifetimeSeconds));
+                return id;
+            }
+
+            /// <summary>票對不對：存在、沒過期、針對同一份設定開的。對就撕掉（只能用一次）。</summary>
+            public static bool Redeem(string? id, string scope, out string why) {
+                Sweep();
+                if (string.IsNullOrWhiteSpace(id) || !_tickets.TryRemove(id.Trim(), out var t)) {
+                    why = "沒有先看過說明，或說明已經過期 —— 請重新按一次「一鍵關閉保護」"; return false;
+                }
+                if (DateTime.UtcNow > t.Expires) { why = "說明已經過期，請重新按一次「一鍵關閉保護」"; return false; }
+                if (!string.Equals(t.Scope, scope, StringComparison.Ordinal)) { why = "看過說明之後這份模型的設定變過了，請重新按一次「一鍵關閉保護」"; return false; }
+                why = ""; return true;
+            }
+
+            static void Sweep() {
+                foreach (var kv in _tickets) if (DateTime.UtcNow > kv.Value.Expires) _tickets.TryRemove(kv.Key, out _);
+            }
         }
 
         /// <summary>查詢被資料保護擋下時的原因。/api/query 用它決定要不要、以及怎麼請使用者確認。</summary>
@@ -3734,13 +3879,15 @@ namespace PBIBridgeCSharp {
                 var stale   = new List<ProtectionStore.Entry>();
                 var match   = ProtectionStore.Find(inst, catalog);
                 var problem = match.Problem;
+                bool allOpen = match.AllOpen;                  // 使用者按過「一鍵關閉保護」：每一欄都回報成開放，另外附上恢復後的等級
                 var policy  = new DataGuard.Policy(
                     problem == null ? ProtectionStore.LevelsOf(match.Entries(), catalog, stale, match.TagsOnly)
-                                    : new Dictionary<string, DataGuard.Level>(), catalog);
+                                    : new Dictionary<string, DataGuard.Level>(), catalog, allOpen);
 
                 var counts = new Dictionary<DataGuard.Level, int> {
                     [DataGuard.Level.Open] = 0, [DataGuard.Level.Pseudonym] = 0,
                     [DataGuard.Level.CountOnly] = 0, [DataGuard.Level.AggregateOnly] = 0 };
+                var behind = new Dictionary<DataGuard.Level, int>(counts);     // 全開放時：恢復保護之後各等級會有幾欄
                 int suggested = 0;
                 var tables = new List<object>();
                 foreach (var t in model.Tables.Where(t => !IsSystemTable(t)).OrderBy(t => t.Name)) {
@@ -3749,16 +3896,24 @@ namespace PBIBridgeCSharp {
                         bool numeric = catalog.Catalog[t.Name][c.Name];
                         var level = policy.OfColumn(t.Name, c.Name, out var source, out var rule);
                         counts[level]++;
+                        string? underlying = null, underlyingSource = null, underlyingRule = null;
+                        if (allOpen) {
+                            var u = policy.UnderlyingOfColumn(t.Name, c.Name, out underlyingSource, out underlyingRule);
+                            behind[u]++;
+                            underlying = DataGuard.LevelKey(u);
+                        }
                         string? why = null;
                         // 使用者親自決定過的欄位不再提示 —— 他把建議略過（明確設成開放）就是答案，
-                        // 「有建議 0」才會等於「我都看過了」
-                        DataGuard.Level? hint = level == DataGuard.Level.Open && source != "explicit"
+                        // 「有建議 0」才會等於「我都看過了」。保護關閉中也不提示：他已經決定整個模型都開放
+                        DataGuard.Level? hint = !allOpen && level == DataGuard.Level.Open && source != "explicit"
                             ? DataGuard.Suggest(c.Name, numeric, out why) : null;
                         if (hint != null) suggested++;
                         cols.Add(new {
                             Name = c.Name, DataType = c.DataType.ToString(), Numeric = numeric, IsHidden = c.IsHidden,
                             Level = DataGuard.LevelKey(level), Source = source, Rule = rule,
-                            Suggested = hint == null ? null : DataGuard.LevelKey(hint.Value), SuggestedWhy = why
+                            Suggested = hint == null ? null : DataGuard.LevelKey(hint.Value), SuggestedWhy = why,
+                            // 保護關閉中（全開放）才有：恢復之後這一欄會回到的等級、由誰決定
+                            Underlying = underlying, UnderlyingSource = underlyingSource, UnderlyingRule = underlyingRule
                         });
                     }
                     tables.Add(new { Name = t.Name, IsHidden = t.IsHidden, Columns = cols });
@@ -3769,8 +3924,12 @@ namespace PBIBridgeCSharp {
                     PathKnown  = inst.FilePath != null,           // false＝服務看不到檔案路徑（從 Power BI 裡面開啟的）
                     CanSave    = match.Key.Length > 0,
                     // 這個模型有沒有逐欄設定。看的是「有沒有任何一筆設定」，不是「設定檔在不在」——
-                    // 重設之後檔案還在，但裡面是空的，那和沒設定過是同一回事
-                    Configured = problem == null && match.File != null && match.File.Entries.Count > 0,
+                    // 重設之後檔案還在，但裡面是空的，那和沒設定過是同一回事。按過「一鍵關閉保護」也算設定過：那是使用者的決定
+                    Configured = problem == null && match.File != null && (match.File.Entries.Count > 0 || allOpen),
+                    // 使用者在儀表板關閉了整個模型的保護（全開放）：每一欄的 level 都是 open、source 是 allOpen，
+                    // underlying 是恢復之後會回到的等級。只影響欄位等級 —— 列數上限、TOCSV／INFO.* 的禁令、DMV 白名單照舊
+                    AllOpen      = allOpen,
+                    AllOpenSince = match.AllOpenSince,
                     SavedAt    = problem == null ? match.File?.SavedAt : null,
                     // 設定是靠內容認出來的（檔案換過位置、改過名，或這次看不到路徑）：告訴使用者它原本是哪個檔案的
                     InheritedFrom = problem == null && match.File != null && !match.Exact ? match.File.File : null,
@@ -3783,6 +3942,11 @@ namespace PBIBridgeCSharp {
                         CountOnly = counts[DataGuard.Level.CountOnly], AggregateOnly = counts[DataGuard.Level.AggregateOnly],
                         Suggested = suggested
                     },
+                    // 全開放時：恢復保護之後各等級會有幾欄（儀表板的「恢復保護」說明用）
+                    UnderlyingSummary = allOpen ? new {
+                        Open = behind[DataGuard.Level.Open], Pseudonym = behind[DataGuard.Level.Pseudonym],
+                        CountOnly = behind[DataGuard.Level.CountOnly], AggregateOnly = behind[DataGuard.Level.AggregateOnly]
+                    } : null,
                     Limits = new { DataGuard.MaxDetailRows, DataGuard.MaxAggregateRows, DataGuard.MaxRowsWithMoney },
                     // 對不到欄位的設定：欄位被刪了，或在沒有固定代號的情況下改了名
                     Stale  = stale.Select(e => new { e.Table, e.Column, e.Level }).ToList(),
@@ -3815,9 +3979,16 @@ namespace PBIBridgeCSharp {
                     string? problem = match.Problem;
                     if (problem != null && !reset)
                         return Results.Json(new { Error = "⛔ 設定檔讀不出來，要先重設", Reason = problem }, statusCode: 409);
+                    // 保護關閉中（全開放）：逐欄設定暫停生效，這時改它只會讓畫面和實際行為對不上。先恢復保護再改。
+                    // 重設例外 —— 它連「全開放」一起清掉，回到通用規則（那是收緊，不必確認）
+                    if (match.AllOpen && !reset)
+                        return Results.Json(new {
+                            Error  = "⛔ 這個模型的保護目前是關閉的（全開放），逐欄設定暫停生效",
+                            Reason = "使用者在儀表板按過「一鍵關閉保護」。要逐欄設定，請先到儀表板的「資料保護」分頁按「恢復保護」。"
+                        }, statusCode: 409);
 
                     var oldEntries = problem == null ? match.Entries() : new List<ProtectionStore.Entry>();
-                    var before = new DataGuard.Policy(ProtectionStore.LevelsOf(oldEntries, catalog, null, match.TagsOnly), catalog);
+                    var before = new DataGuard.Policy(ProtectionStore.LevelsOf(oldEntries, catalog, null, match.TagsOnly), catalog, match.AllOpen);
 
                     // 先把舊設定對到欄位現在的名字（改過名的在這裡跟上），對不上的原樣留著
                     var work = new Dictionary<string, ProtectionStore.Entry>();
@@ -3950,12 +4121,16 @@ namespace PBIBridgeCSharp {
                         }
                     }
 
-                    var saved = ProtectionStore.Save(inst, catalog, match, newEntries);
+                    bool wasAllOpen = match.AllOpen;        // 重設時連全開放一起清掉
+                    var saved = ProtectionStore.Save(inst, catalog, match, newEntries,
+                                                     reset ? ProtectionStore.AllOpenChange.Off : ProtectionStore.AllOpenChange.Keep);
                     DataGuard.Audit("PROTECTION", $"逐欄設定已變更：收緊 {tightened}、放寬 {loosened.Count}"
+                                  + (wasAllOpen ? "（原本是全開放，一併恢復保護）" : "")
                                   + (loosened.Count > 0 ? "（使用者已確認）：" + string.Join("；", loosened.Take(20)) : ""), "", 0, inst.FileName);
                     Console.WriteLine($"✅ 資料保護設定已儲存：收緊 {tightened} 欄、放寬 {loosened.Count} 欄" + (needConfirm ? "（使用者已確認）" : ""));
                     return Results.Ok(new {
-                        message = reset ? "已清除這個模型的逐欄設定" : $"已儲存：收緊 {tightened} 欄、放寬 {loosened.Count} 欄",
+                        message = reset ? (wasAllOpen ? "已清除這個模型的逐欄設定，並恢復保護（照通用規則）" : "已清除這個模型的逐欄設定")
+                                        : $"已儲存：收緊 {tightened} 欄、放寬 {loosened.Count} 欄",
                         Tightened = tightened, Loosened = loosened.Count, ConfirmedByUser = needConfirm,
                         SavedAt = saved.SavedAt
                     });
@@ -3963,6 +4138,190 @@ namespace PBIBridgeCSharp {
                     return ex.StatusCode == 404 ? Results.NotFound(ex.Message) : Results.BadRequest(ex.Message);
                 } catch (Exception ex) {
                     Console.WriteLine($"❌ 變更資料保護設定失敗: {ex.Message}");
+                    return Results.Problem(detail: ex.Message, statusCode: 500);
+                }
+            });
+
+            // =====================================================================
+            // 資料保護：整個模型一鍵關閉／恢復（全開放）
+            // =====================================================================
+            // 使用者在做一份全新的報表、或模型裡沒有敏感資料時，逐欄放寬太慢（一次 12 欄、每次都要按確認視窗）。
+            // 這兩個端點給儀表板上的「一鍵關閉保護」與「恢復保護」用：
+            //   · 關閉是放寬，所以仍然要使用者本人決定。從儀表板按的 —— 瀏覽器來源標頭（DashboardRequest）＋看過說明的票
+            //     （OpenTickets）＋人在儀表板前面（HumanPresence）—— 直接生效，不再跳 Windows 確認視窗：那一下就是他的決定。
+            //     從 API 用戶端送來的（PowerShell、AI）、或三樣有任何一樣不成立，一律改走確認視窗，和逐欄放寬一樣
+            //   · 恢復是收緊，誰送都立刻生效
+            // 逐欄設定留在設定檔裡不動：關閉時暫停生效、恢復時原樣回來。
+
+            // 全開放會影響什麼（儀表板的說明與確認視窗共用）：目前受限的欄數、由誰決定、每一欄的變化
+            (int Restricted, int ByPattern, int Explicit, List<string> Lines) AllOpenImpact(DataGuard.Policy underlying, DataGuard.Derivations catalog) {
+                int byPattern = 0, byExplicit = 0;
+                var lines = new List<string>();
+                foreach (var t in catalog.Catalog)
+                    foreach (var c in t.Value.Keys) {
+                        var level = underlying.UnderlyingOfColumn(t.Key, c, out var source, out _);
+                        if (level == DataGuard.Level.Open) continue;
+                        if (source == "explicit") byExplicit++; else byPattern++;
+                        lines.Add(OneLine($"'{t.Key}'[{c}]：{DataGuard.LevelName(level)} → 開放"));
+                    }
+                lines.Sort(StringComparer.Ordinal);
+                return (lines.Count, byPattern, byExplicit, lines);
+            }
+
+            // 票綁著的東西：哪一份設定檔、這次打開的模型身分、現在是不是全開放、逐欄設定的內容
+            string AllOpenScope(ProtectionStore.Match m) =>
+                m.Key + "\u0001" + m.Identity + "\u0001" + (m.AllOpen ? "allopen" : "guarded") + "\u0001" + ProtectionStore.Fingerprint(m.Entries());
+
+            // 按下「一鍵關閉保護」時先看到的說明：會影響幾欄、哪些。從儀表板來的請求同時拿到一張票，套用時要帶回來；
+            // API 用戶端也可以讀（都是結構資訊），只是拿不到票 —— 它要關就得走確認視窗
+            app.MapPost("/api/protection/all-open/preview", (HttpContext ctx) => {
+                try {
+                    var inst = ResolveInstance(ctx);
+                    DataGuard.Derivations catalog;
+                    using (var server = new Server()) {
+                        server.Connect($"Data Source=localhost:{inst.Port};");
+                        catalog = DataGuard.Derivations.FromModel(server.Databases[0].Model);
+                    }
+                    var match = ProtectionStore.Find(inst, catalog);
+                    if (match.Key.Length == 0) return Results.BadRequest(NoIdentityMessage);
+                    if (match.Problem != null)
+                        return Results.Json(new { Error = "⛔ 設定檔讀不出來，要先重設", Reason = match.Problem }, statusCode: 409);
+                    var underlying = new DataGuard.Policy(ProtectionStore.LevelsOf(match.Entries(), catalog, null, match.TagsOnly), catalog);
+                    var impact = AllOpenImpact(underlying, catalog);
+                    bool fromDashboard = DashboardRequest.IsFromDashboard(ctx, out _);
+                    return Results.Ok(new {
+                        File = inst.FileName, AllOpen = match.AllOpen, AllOpenSince = match.AllOpenSince,
+                        TotalColumns = catalog.Catalog.Sum(t => t.Value.Count),
+                        Restricted = impact.Restricted, ByPattern = impact.ByPattern, Explicit = impact.Explicit,
+                        Samples = impact.Lines.Take(12).ToList(),
+                        Limits = new { DataGuard.MaxDetailRows, DataGuard.MaxAggregateRows },
+                        FromDashboard = fromDashboard,
+                        Ticket = fromDashboard && !match.AllOpen ? OpenTickets.Issue(AllOpenScope(match)) : null,
+                        TicketSeconds = OpenTickets.LifetimeSeconds
+                    });
+                } catch (OpException ex) {
+                    return ex.StatusCode == 404 ? Results.NotFound(ex.Message) : Results.BadRequest(ex.Message);
+                } catch (Exception ex) {
+                    Console.WriteLine($"❌ 讀取全開放說明失敗: {ex.Message}");
+                    return Results.Problem(detail: ex.Message, statusCode: 500);
+                }
+            });
+
+            // 關閉（AllOpen: true）或恢復（AllOpen: false）整個模型的保護
+            app.MapPost("/api/protection/all-open", async (AllOpenRequest req, HttpContext ctx) => {
+                try {
+                    if (req.AllOpen == null)
+                        return Results.BadRequest("❌ 要給 AllOpen：true 關閉這個模型的保護（全開放）、false 恢復保護");
+                    var inst = ResolveInstance(ctx);
+                    bool turnOn = req.AllOpen == true;
+                    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] 🛡️ {(turnOn ? "關閉" : "恢復")}整個模型的資料保護：{inst.FileName}");
+
+                    DataGuard.Derivations catalog;
+                    using (var server = new Server()) {
+                        server.Connect($"Data Source=localhost:{inst.Port};");
+                        catalog = DataGuard.Derivations.FromModel(server.Databases[0].Model);
+                    }
+                    var match = ProtectionStore.Find(inst, catalog);
+                    if (match.Key.Length == 0) return Results.BadRequest(NoIdentityMessage);
+                    if (match.Problem != null)
+                        return Results.Json(new { Error = "⛔ 設定檔讀不出來，要先重設", Reason = match.Problem }, statusCode: 409);
+                    var underlying = new DataGuard.Policy(ProtectionStore.LevelsOf(match.Entries(), catalog, null, match.TagsOnly), catalog);
+                    var impact = AllOpenImpact(underlying, catalog);
+                    bool fromDashboard = DashboardRequest.IsFromDashboard(ctx, out var headerWhy);
+
+                    // ── 恢復：收緊，誰送都立刻生效 ──
+                    if (!turnOn) {
+                        if (!match.AllOpen)
+                            return Results.Ok(new { message = "這個模型的保護本來就是開著的，沒有需要變更的項目", AllOpen = false, Restricted = impact.Restricted });
+                        var savedOff = ProtectionStore.Save(inst, catalog, match, match.Entries(), ProtectionStore.AllOpenChange.Off);
+                        DataGuard.Audit("PROTECTION-RESTORE",
+                            $"恢復整個模型的保護：{impact.Restricted} 欄回到受限（通用規則 {impact.ByPattern}、逐欄設定 {impact.Explicit}）；來源 {(fromDashboard ? "儀表板" : "API")}",
+                            "", 0, inst.FileName);
+                        Console.WriteLine($"✅ 已恢復保護：{impact.Restricted} 欄回到受限");
+                        return Results.Ok(new {
+                            message = $"已恢復保護：{impact.Restricted} 欄回到受限", AllOpen = false,
+                            Restricted = impact.Restricted, ByPattern = impact.ByPattern, Explicit = impact.Explicit, SavedAt = savedOff.SavedAt
+                        });
+                    }
+
+                    // ── 關閉：放寬，要使用者本人決定 ──
+                    if (match.AllOpen)
+                        return Results.Ok(new { message = "這個模型的保護已經是關閉的（全開放）", AllOpen = true, AllOpenSince = match.AllOpenSince, Opened = 0 });
+
+                    string via = "dialog";
+                    string? why;
+                    if (fromDashboard) {
+                        if (string.IsNullOrWhiteSpace(req.Ticket))
+                            return Results.BadRequest("❌ 請先按「一鍵關閉保護」看過說明再確認（這個請求沒有帶說明的票）");
+                        if (!OpenTickets.Redeem(req.Ticket, AllOpenScope(match), out var ticketWhy))
+                            return Results.Json(new { Error = "⛔ " + ticketWhy, Reason = ticketWhy }, statusCode: 409);
+                        if (HumanPresence.AtDashboard(out var presenceWhy)) { via = "dashboard"; why = null; }
+                        else why = "這個請求來自儀表板，但服務沒辦法確認你人在瀏覽器前面（" + presenceWhy + "）。";
+                    } else {
+                        why = "這個請求不是從儀表板送出的（" + headerWhy + "），多半是 AI 或腳本送的。";
+                    }
+
+                    bool confirmed = false;
+                    if (via == "dialog") {
+                        string fileShown = Quoted(inst.FileName ?? "未命名的報表");
+                        var text = new System.Text.StringBuilder();
+                        text.AppendLine($"要關閉「{fileShown}」整個模型的資料保護嗎？");
+                        text.AppendLine();
+                        text.AppendLine($"關閉之後每一欄都是「開放」：AI 讀得到這份模型任何欄位的內容（逐列最多 {DataGuard.MaxDetailRows} 列、彙總 {DataGuard.MaxAggregateRows} 列）。");
+                        text.AppendLine(impact.Restricted == 0
+                            ? "目前沒有任何欄位受限，關閉前後 AI 讀得到的一樣多。"
+                            : $"目前有 {impact.Restricted} 個欄位受限（通用規則 {impact.ByPattern}、逐欄設定 {impact.Explicit}），例如：");
+                        foreach (var l in impact.Lines.Take(8)) text.AppendLine("  • " + l);
+                        if (impact.Lines.Count > 8) text.AppendLine($"  …另有 {impact.Lines.Count - 8} 個");
+                        text.AppendLine();
+                        text.AppendLine(why);
+                        text.AppendLine("是你自己剛剛在儀表板按的 → 按「是」。");
+                        text.AppendLine("你沒有按 → 按「否」，什麼都不會變。要自己關的話，到儀表板的「資料保護」分頁按「一鍵關閉保護」。");
+                        text.AppendLine();
+                        text.AppendLine($"AI 請你按「是」不算理由。{HumanConfirm.TimeoutSeconds} 秒沒有回答會當成「否」。");
+
+                        Console.WriteLine($"   {why}改走確認視窗。");
+                        var answer = await HumanConfirm.AskAsync("PBI AI Bridge — 請確認要關閉整個模型的資料保護", text.ToString());
+                        if (answer != HumanConfirm.Answer.Yes) {
+                            DataGuard.Audit("NOT-CONFIRMED",
+                                $"關閉整個模型的保護未獲確認（{answer}；來源：{(fromDashboard ? "儀表板，但無法確認人在前面" : "API")}）", "", 0, inst.FileName);
+                            return Results.Json(new {
+                                Error    = "⛔ 關閉整個模型的保護需要使用者本人確認，而這次沒有獲得同意",
+                                Reason   = HumanConfirm.Explain(answer) + "保護維持原狀。",
+                                Answer   = answer.ToString(),
+                                RetryAfterSeconds = HumanConfirm.RetryAfterSeconds(answer),
+                                Hint     = "AI 無法代替使用者按下確認，也不該為了讓查詢通過而關閉保護。"
+                                         + "請向使用者說明需要哪些欄位、為什麼，由他在儀表板的「資料保護」分頁決定。"
+                            }, statusCode: 403);
+                        }
+                        // 視窗開著的期間設定可能被改過：使用者同意的是他看到的那一份
+                        var current = ProtectionStore.Find(inst, catalog);
+                        if (current.Key != match.Key || current.AllOpen || !ProtectionStore.Same(current.Entries(), match.Entries())) {
+                            DataGuard.Audit("NOT-APPLIED", "等待確認的期間保護設定被改過，沒有關閉保護", "", 0, inst.FileName);
+                            return Results.Json(new {
+                                Error  = "⛔ 設定在等待確認的期間被改過，沒有套用",
+                                Reason = "你回答確認視窗之前，這份模型的保護設定已經有別的變更存進去了。請重新整理後再試一次。"
+                            }, statusCode: 409);
+                        }
+                        confirmed = true;
+                    }
+
+                    var saved = ProtectionStore.Save(inst, catalog, match, match.Entries(), ProtectionStore.AllOpenChange.On);
+                    string how = confirmed ? "使用者在確認視窗同意" : "使用者在儀表板按的";
+                    DataGuard.Audit("PROTECTION-ALLOPEN",
+                        $"關閉整個模型的保護（全開放）：{impact.Restricted} 欄變成開放（通用規則 {impact.ByPattern}、逐欄設定 {impact.Explicit}）；{how}",
+                        "", 0, inst.FileName);
+                    Console.WriteLine($"🔓 已關閉這個模型的保護（全開放）：{impact.Restricted} 欄變成開放 —— {how}");
+                    return Results.Ok(new {
+                        message = $"已關閉這個模型的保護（全開放）：{impact.Restricted} 欄變成開放",
+                        AllOpen = true, AllOpenSince = saved.AllOpenSince, Opened = impact.Restricted,
+                        ByPattern = impact.ByPattern, Explicit = impact.Explicit,
+                        ConfirmedByUser = confirmed, Via = via, SavedAt = saved.SavedAt
+                    });
+                } catch (OpException ex) {
+                    return ex.StatusCode == 404 ? Results.NotFound(ex.Message) : Results.BadRequest(ex.Message);
+                } catch (Exception ex) {
+                    Console.WriteLine($"❌ 關閉／恢復整個模型的保護失敗: {ex.Message}");
                     return Results.Problem(detail: ex.Message, statusCode: 500);
                 }
             });
@@ -4048,8 +4407,9 @@ namespace PBIBridgeCSharp {
                             if (settings.Problem != null)
                                 return Blocked("BLOCKED-SETTINGS", settings.Problem,
                                     "請使用者到儀表板（http://localhost:5500/）的「資料保護」分頁處理。", 0);
+                            // settings.AllOpen：使用者在儀表板關閉了這個模型的保護，每一欄都當成開放（列數上限與寫法禁令照舊）
                             policy = new DataGuard.Policy(
-                                ProtectionStore.LevelsOf(settings.Entries(), derived, null, settings.TagsOnly), derived);
+                                ProtectionStore.LevelsOf(settings.Entries(), derived, null, settings.TagsOnly), derived, settings.AllOpen);
                             var expanded = DataGuard.ExpandDerivations(query, derived);
                             if (expanded.Incomplete)
                                 return Blocked("BLOCKED-INCOMPLETE", "這句查詢牽涉到的量值／計算資料行定義多到無法完整檢查，沒看完的東西不能當成沒問題。",
@@ -4153,7 +4513,9 @@ namespace PBIBridgeCSharp {
                                         $"金額查詢回傳 {rows.Count} 列，超過上限 {DataGuard.MaxRowsWithMoney} 列。",
                                         "請改用基數較低的分組鍵（產品線、月份、廠別），或先篩選再彙總。", rows.Count);
 
-                                DataGuard.Audit("OK", touchesMoney ? "含金額欄位" : "", query, rows.Count, inst.FileName);
+                                DataGuard.Audit("OK", string.Join("；", new[] {
+                                    policy != null && policy.AllOpen ? "保護關閉中（全開放）" : null,
+                                    touchesMoney ? "含金額欄位" : null }.Where(s => s != null)), query, rows.Count, inst.FileName);
 
                                 Console.WriteLine($"✅ 查詢完成：{rows.Count} 列 / {sw.ElapsedMilliseconds} ms" +
                                                   (truncated ? $"（已截斷至 {maxRows} 列）" : ""));

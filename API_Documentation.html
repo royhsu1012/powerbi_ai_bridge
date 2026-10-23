@@ -635,6 +635,9 @@ FROM $SYSTEM.DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS</span>
                            另有 <code>enabled</code>、<code>configured</code>（存過至少一筆逐欄設定）、<code>savedAt</code>、<code>limits</code>（列數上限）、<code>summary</code>、
                            <code>pathKnown</code>（服務知不知道檔案路徑）、<code>canSave</code>（認不認得出這份模型、設定存不存得起來）、
                            <code>inheritedFrom</code>（設定是靠內容認回來的時候，當初儲存它的檔案）、<code>stale</code>（對不到現有欄位的設定）。</p>
+                        <p><code>allOpen</code> 為 <code>true</code> 時，使用者在儀表板按過「一鍵關閉保護」：每一欄的 <code>level</code> 都是 <code>open</code>、<code>source</code> 是 <code>allOpen</code>，
+                           另有 <code>underlying</code>／<code>underlyingSource</code>／<code>underlyingRule</code>（恢復之後會回到的等級）與 <code>underlyingSummary</code>、<code>allOpenSince</code>。
+                           只影響欄位等級 —— 列數上限、<code>TOCSV</code>／<code>INFO.*</code> 的禁令、DMV 白名單照舊。</p>
                         <p>等級是<span class="hl">結構資訊</span>，AI 可以放心讀 —— 先知道哪些欄位受限，才寫得出一次就過的查詢。</p>
                         <span class="code">PowerShell：Get-PbiProtection [-Table 表] [-All] [-Raw]</span>
                         <span class="note"><i data-icon="info"></i><span>等級怎麼決定：<strong>逐欄設定 ＞ 通用規則 ＞ 開放</strong>。通用規則是 <code>appsettings.json</code> 的 <code>DataProtection</code> 清單（欄名樣式，對每個模型都生效）。逐欄設定每個模型一份，存在 <code>%LOCALAPPDATA%\PBI_AI_Bridge\protection\</code>，只由服務讀寫。設定跟著<strong>模型</strong>走：先比完整路徑，對不上就靠資料行的固定代號（LineageTag）認 —— 檔案搬家、改名、另存新檔，或從 Power BI 裡面開啟（拿不到路徑）時設定都還在。靠內容認回來的設定只套用到認得出來的同一個資料行。</span></span>
@@ -650,7 +653,23 @@ FROM $SYSTEM.DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS</span>
                         <p style="margin-top:14px"><code>Level: "default"</code> 拿掉逐欄設定、回到通用規則；<code>{ "Reset": true }</code> 清除這個模型全部的逐欄設定（有任何一欄因此變寬鬆，或設定檔讀不出來時，會跳確認視窗；不受 12 欄的限制）。文字欄位不能設成 <code>aggregateOnly</code>。</p>
                         <p>把一個本來就開放、也沒有逐欄設定的欄位設成 <code>open</code> 不會存任何東西（回「沒有需要變更的項目」）。等待確認的期間設定被別的請求改過時回 <strong>409</strong>、這一批不套用 —— 重新讀取後再送。</p>
                         <span class="code">PowerShell：Set-PbiProtection -Table 客戶 -Column 電話, 地址 -Level countOnly</span>
-                        <span class="note warn"><i data-icon="shield"></i><span>人平常在儀表板的「資料保護」分頁用點的。儀表板會把一次儲存拆成兩次送：先送收緊、再送放寬 —— 錯過確認視窗時，收緊的部分已經生效。</span></span>
+                        <span class="note warn"><i data-icon="shield"></i><span>人平常在儀表板的「資料保護」分頁用點的。儀表板會把一次儲存拆成兩次送：先送收緊、再送放寬 —— 錯過確認視窗時，收緊的部分已經生效。保護關閉中（<code>allOpen</code>）時逐欄變更回 <strong>409</strong>：先恢復保護再改；<code>Reset</code> 例外，它連全開放一起清掉。</span></span>
+                    </div>
+                    <div class="api-card wide">
+                        <div class="badges"><span class="tag post">POST</span><span class="tag">儀表板專用</span><span class="tag">從 API 關閉要使用者確認</span></div>
+                        <h3>/api/protection/all-open/preview · /api/protection/all-open</h3>
+                        <h4>整個模型一鍵關閉（全開放）／恢復</h4>
+                        <p>給儀表板上的「一鍵關閉保護」與「恢復保護」用。<code>preview</code> 回會影響什麼：<code>totalColumns</code>、目前受限的 <code>restricted</code>（拆成通用規則 <code>byPattern</code>、逐欄設定 <code>explicit</code>）、前幾筆 <code>samples</code>。
+                           接著送 <code>{ "AllOpen": true, "Ticket": "…" }</code> 關閉、<code>{ "AllOpen": false }</code> 恢復。關閉後每一欄都是開放；逐欄設定留著不動，恢復時原樣回來。
+                           稽核記錄各寫一筆（<code>PROTECTION-ALLOPEN</code>／<code>PROTECTION-RESTORE</code>：幾欄、由誰決定、來源）。</p>
+                        <p><strong>關閉是放寬，所以仍然要使用者本人決定 —— 差別只在「怎麼決定」：</strong></p>
+                        <ul>
+                            <li><strong>在儀表板按的</strong>：不跳 Windows 確認視窗。服務認三件事：瀏覽器自己帶、頁面腳本改不了的同源標頭（<code>Sec-Fetch-Site</code>／<code>Origin</code>／<code>Referer</code>）；<code>preview</code> 發給儀表板的一次性 <code>ticket</code>（看過說明才有，綁著當時的設定，3 分鐘內有效、用一次就作廢）；
+                                以及人在不在儀表板前面（最前面的視窗標題是「資料保護 · PBI AI Bridge」、幾秒內有鍵盤或滑鼠動作）。三樣都成立才直接生效。</li>
+                            <li><strong>從 API 用戶端送的</strong>（PowerShell、AI），或上面任何一樣不成立：改走 Windows 確認視窗，和逐欄放寬一樣 —— 視窗會寫明這個請求不是從儀表板來的。沒獲得同意回 <strong>403</strong>（格式同下）。<code>preview</code> 對 API 用戶端照樣回數字，但 <code>fromDashboard</code> 是 <code>false</code>、沒有 <code>ticket</code>。</li>
+                            <li><strong>恢復是收緊</strong>：誰送都立刻生效。</li>
+                        </ul>
+                        <span class="note warn"><i data-icon="alert"></i><span>給 AI 代理：這條路是給使用者自己按的。<code>tools\PBI-Bridge.ps1</code> 刻意沒有包裝它，hook 也會攔下指令列上出現這個端點或 <code>Sec-Fetch-*</code> 標頭的指令。需要更多欄位時，向使用者說明要哪些、為什麼，由他在儀表板決定；看目前狀態用 <code>Get-PbiProtection</code>（<code>allOpen</code>）。</span></span>
                     </div>
                     <div class="api-card wide">
                         <div class="badges"><span class="tag">確認視窗</span><span class="tag">AI 繞不過去</span></div>
@@ -660,6 +679,7 @@ FROM $SYSTEM.DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS</span>
                             <table class="simple">
                                 <tr><th>情況</th><th>觸發的請求</th><th>視窗會列出</th></tr>
                                 <tr><td>放寬欄位等級</td><td><code>POST /api/protection</code>（有任何一欄變寬鬆 —— 包含 <code>Reset</code> 造成的；或設定檔讀不出來時的重設）</td><td>每一欄從什麼等級變成什麼等級</td></tr>
+                                <tr><td>關閉整個模型的保護</td><td><code>POST /api/protection/all-open</code>（<code>AllOpen: true</code>）—— 只有從 API 用戶端送的、或儀表板那一下服務認不出是人按的才跳；使用者在儀表板按的不跳</td><td>目前受限幾欄（通用規則／逐欄設定各幾欄）、前幾筆、這個請求來自哪裡</td></tr>
                                 <tr><td>放行一句被擋下的查詢</td><td><code>POST /api/query</code> 帶 <code>AskUser: true</code></td><td>被擋的原因、查詢提到的受限欄位、最多幾列、查詢內容</td></tr>
                                 <tr><td>經由 API 改寫 Power Query</td><td><code>update-m</code>、<code>upsert-expression</code>、<code>create-table</code>（<code>Kind: "m"</code>）、<code>add-column</code>（給 <code>SourceColumn</code>）、<code>restore</code>（範圍含 <code>mquery</code>／<code>expressions</code>）、含上述操作的 <code>batch</code></td><td>要改哪些表／共用查詢（一次最多 8 項）</td></tr>
                             </table>

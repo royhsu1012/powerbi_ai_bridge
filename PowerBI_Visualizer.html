@@ -407,6 +407,16 @@
         .waiting .wcount b { color: var(--text); font-variant-numeric: tabular-nums; }
 
         .vs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+        /* 分頁上的「全開放」標記：這份模型的保護被整個關掉了，切到別的檢視也看得見 */
+        .vs-badge { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+        .sync .dot.off { background: var(--danger); }
+        .sync .off { color: var(--danger); font-weight: 600; }
+        /* 放寬的按鈕用紅色外框：它會讓 AI 看到更多，不該長得像「儲存」 */
+        .btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-soft); }
+        .waiting .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+        .waiting .fine { font-size: 12.5px; color: var(--muted); }
+        .waiting .box b { color: var(--text); }
 
         ::-webkit-scrollbar { width: 10px; height: 10px; }
         ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 3px solid var(--bg); }
@@ -452,7 +462,7 @@
             </div>
             <div class="viewswitch" role="tablist" aria-label="切換檢視">
                 <button class="vs active" type="button" role="tab" data-view="model"><i data-icon="table"></i>模型結構</button>
-                <button class="vs" type="button" role="tab" data-view="protection"><i data-icon="shield"></i>資料保護<span class="vs-dot" id="protDot" hidden></span></button>
+                <button class="vs" type="button" role="tab" data-view="protection"><i data-icon="shield"></i>資料保護<span class="vs-dot" id="protDot" hidden></span><span class="vs-badge" id="protOff" title="這份模型的保護已關閉：每一欄都是開放" hidden>全開放</span></button>
             </div>
         </div>
         <div class="toolbar">
@@ -504,6 +514,18 @@
             <p class="wcount" id="waitCount">剩 <b id="waitLeft">120</b> 秒。沒有回答會當成「否」，不會有任何變更。</p>
         </div>
     </div>
+    <!-- 頁面自己的確認框（一鍵關閉保護用）：先把會影響什麼列出來，使用者按了才送 -->
+    <div id="confirmBox" class="waiting" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="box">
+            <div class="wicon"><i data-icon="unlock"></i></div>
+            <h2 id="confirmTitle"></h2>
+            <div id="confirmBody"></div>
+            <div class="actions">
+                <button id="confirmCancel" class="btn btn-ghost btn-sm" type="button">取消</button>
+                <button id="confirmOk" class="btn btn-primary btn-sm" type="button">確定</button>
+            </div>
+        </div>
+    </div>
     <div id="toast" role="status" aria-live="polite"></div>
 
     <script>
@@ -523,6 +545,7 @@
             check:   '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
             shield:  '<path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.2 7.5 9.5 4.4-1.3 7.5-5.1 7.5-9.5V6z"/>',
             lock:    '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+            unlock:  '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
             plug:    '<path d="M9 3v4M15 3v4"/><path d="M6 7h12v3a6 6 0 0 1-12 0z"/><path d="M12 16v5"/>',
             chevron: '<path d="m9 6 6 6-6 6"/>',
             alert:   '<path d="M12 4 3 20h18z"/><path d="M12 10v5M12 17.5v.5"/>',
@@ -589,6 +612,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll('i[data-icon]').forEach(el => { el.outerHTML = svg(el.dataset.icon); });
+            document.title = PAGE_TITLE[view];
             updateThemeButton();
             $('themeBtn').addEventListener('click', toggleTheme);
             $('refreshBtn').addEventListener('click', () => { if (okToDropPending()) fetchSchema(); });
@@ -966,9 +990,14 @@
             return confirm(`資料保護有 ${pending.size} 項還沒儲存。要放棄嗎？`);
         }
 
+        // 視窗標題跟著檢視走。「資料保護 · PBI AI Bridge」這一串服務會認：按「一鍵關閉保護」時，
+        // 它會看最前面的視窗是不是這一頁，才把那一下當成你本人按的（否則退回 Windows 確認視窗）
+        const PAGE_TITLE = { model: '模型結構 · PBI AI Bridge', protection: '資料保護 · PBI AI Bridge' };
+
         function setView(v) {
             if (v === view) return;
             view = v;                                        // 切換檢視不會丟掉還沒儲存的變更
+            document.title = PAGE_TITLE[v];
             document.querySelectorAll('.vs[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === v));
             $('brandSub').textContent = v === 'protection' ? 'AI 能讀什麼' : '模型結構瀏覽';
             $('searchInput').placeholder = v === 'protection' ? '搜尋欄位，例如：客戶、金額' : '搜尋資料表、欄位或量值';
@@ -987,6 +1016,12 @@
                 maxLoosen: Number(g(d, 'maxLoosenPerConfirm')) || 12,
                 confirmTimeout: Number(g(d, 'confirmTimeoutSeconds')) || 120,
                 limits: g(d, 'limits') || {},
+                // 使用者按過「一鍵關閉保護」：每一欄都是開放，underlying 是恢復後會回到的等級
+                allOpen: !!g(d, 'allOpen'), allOpenSince: g(d, 'allOpenSince') || '',
+                underlyingSummary: (us => us ? {
+                    open: Number(g(us, 'open')) || 0, pseudonym: Number(g(us, 'pseudonym')) || 0,
+                    countOnly: Number(g(us, 'countOnly')) || 0, aggregateOnly: Number(g(us, 'aggregateOnly')) || 0,
+                } : null)(g(d, 'underlyingSummary')),
                 stale: (g(d, 'stale') || []).map(s => ({ table: g(s, 'table'), column: g(s, 'column'), level: g(s, 'level') })),
                 tables: (g(d, 'tables') || []).map(t => ({
                     name: g(t, 'name') || '', isHidden: !!g(t, 'isHidden'),
@@ -994,10 +1029,13 @@
                         name: g(c, 'name') || '', dataType: g(c, 'dataType') || '', numeric: !!g(c, 'numeric'),
                         isHidden: !!g(c, 'isHidden'), level: g(c, 'level') || 'open', source: g(c, 'source') || 'default',
                         rule: g(c, 'rule') || '', suggested: g(c, 'suggested') || '', suggestedWhy: g(c, 'suggestedWhy') || '',
+                        underlying: g(c, 'underlying') || '', underlyingSource: g(c, 'underlyingSource') || '', underlyingRule: g(c, 'underlyingRule') || '',
                     })),
                 })),
             };
         }
+        // 全開放時：恢復保護之後會有幾欄受限
+        const restoredCount = () => { const u = prot?.underlyingSummary; return u ? u.pseudonym + u.countOnly + u.aggregateOnly : 0; };
 
         async function fetchProtection() {
             const res = await fetch('/api/protection', { headers: apiHeaders() });
@@ -1036,6 +1074,8 @@
 
         function updateProtDot() {
             const dot = $('protDot');
+            // 保護被整個關掉時，分頁上掛「全開放」—— 在模型結構檢視也看得到
+            $('protOff').hidden = !(prot && prot.enabled && prot.allOpen && !prot.problem);
             let why = '';
             if (pending.size > 0) why = `有 ${pending.size} 項還沒儲存`;
             else if (prot && prot.enabled && prot.canSave && !prot.problem) {
@@ -1048,8 +1088,11 @@
             dot.title = why;
         }
 
-        // 設定檔讀不出來時要先重設，報表還沒存檔時沒有地方記 —— 這兩種狀況都不能改
-        const canEdit = () => prot.canSave && !prot.problem;
+        // 設定檔讀不出來時要先重設，報表還沒存檔時沒有地方記 —— 這兩種狀況都不能改。
+        // 保護關閉中（全開放）也不能逐欄改：那些等級暫停生效，改了只會讓畫面和實際行為對不上，先按「恢復保護」
+        const canEdit = () => prot.canSave && !prot.problem && !prot.allOpen;
+        // 「一鍵關閉保護」與「恢復保護」要能按的條件（和逐欄設定不同：全開放時當然要能恢復）
+        const canToggleAll = () => prot.enabled && prot.canSave && !prot.problem;
         function findProtTable(name) { return prot.tables.find(t => t.name === name); }
         function findCol(tName, cName) { return findProtTable(tName)?.columns.find(c => c.name === cName); }
 
@@ -1091,6 +1134,9 @@
             let note = '';
             if (dirty) note =`原本：${esc(LEVEL_LABEL[c.level] || c.level)} → ${esc(LEVEL_LABEL[lv] || lv)}　`
                 + (isLoosening(c.level, lv) ? '<span class="loosen">放寬，儲存時要你確認</span>' : '收緊');
+            // 保護關閉中：這一欄現在是開放，灰字寫恢復後會回到什麼
+            else if (prot.allOpen && c.underlying && c.underlying !== 'open') note = `保護關閉中 · 恢復後：${esc(LEVEL_LABEL[c.underlying] || c.underlying)}`
+                + (c.underlyingSource === 'explicit' ? '（你設定的）' : c.underlyingSource === 'pattern' ? `（通用規則 ${esc(c.underlyingRule)}）` : '');
             else if (c.source === 'explicit') note = '你設定的';
             else if (c.source === 'pattern') note = `通用規則 ${esc(c.rule)}`;
             const hint = hasOpenHint(t.name, c) && canEdit()
@@ -1151,6 +1197,14 @@
 
             const notices = [];
             if (protNotice) notices.push(banner(protNotice.tone, protNotice.tone === 'warn' ? 'alert' : 'check', esc(protNotice.text)));
+            // 保護被整個關掉了：放最前面，而且是紅的 —— 這是這一頁現在最重要的事實
+            if (canToggleAll() && prot.allOpen) {
+                const u = prot.underlyingSummary || { pseudonym: 0, countOnly: 0, aggregateOnly: 0 };
+                notices.push(banner('warn', 'unlock',
+                    `<b>這份模型的保護已關閉（全開放，自 ${esc(prot.allOpenSince.slice(0, 16))}）。</b>AI 讀得到每一欄的內容。下面的逐欄等級暫停生效（灰字是恢復後會回到的等級），要改之前先恢復。`
+                    + `<br>按「恢復保護」立刻回到原本的設定：<b>${restoredCount()}</b> 欄受限（換成代號 ${u.pseudonym}、只能計數 ${u.countOnly}、只能彙總 ${u.aggregateOnly}）。恢復是收緊，不用再確認。`,
+                    '<button class="btn btn-primary btn-sm" type="button" data-restore>恢復保護</button>'));
+            }
             if (prot.problem) notices.push(banner('warn', 'alert',
                 '這份模型的保護設定檔讀不出來。為了安全，AI 的查詢現在全部被擋下。按「重設」清掉重來（會跳出確認視窗）。',
                 '<button class="btn btn-ghost btn-sm" type="button" data-reset>重設</button>'));
@@ -1171,6 +1225,12 @@
                 '<button class="btn btn-ghost btn-sm" type="button" data-filter="suggested">先看一下</button>'
                 + '<button class="btn btn-primary btn-sm" type="button" data-apply-suggestions>套用全部建議</button>',
                 ` id="sugNotice"${n.suggested ? '' : ' hidden'}`));
+            // 整個模型一次關掉：放在提醒的最後面。按鈕是紅框 —— 它讓 AI 看到更多，不該長得像「儲存」
+            if (canToggleAll() && !prot.allOpen) notices.push(banner('', 'unlock',
+                '<b>整個模型都不需要保護？</b>做一份全新的報表、或這份模型沒有敏感資料時，可以一次把每一欄都設成「開放」。'
+                + '按下去會先列出會影響幾欄、哪些是通用規則抓到的，你確認後立刻生效 —— 這是你自己在這裡按的，不會再跳 Windows 確認視窗。'
+                + '逐欄設定會保留，隨時可以一鍵恢復。',
+                '<button class="btn btn-danger btn-sm" type="button" data-all-open>一鍵關閉保護</button>'));
 
             const visibleOf = new Map(prot.tables.map(t => [t.name, t.columns.filter(c => rowVisible(t, c, q)).length]));
             let shown = 0;
@@ -1213,7 +1273,9 @@
                             <h1>資料保護</h1>
                             <p>AI 在雲端，它讀到的內容都會離開這台電腦。欄位名稱 AI 一定看得到；這裡決定的是每個欄位「裡面的內容」它能看到多少。</p>
                         </div>
-                        <div class="sync"><span class="dot"></span>${esc(prot.file)}${prot.pathKnown ? '' : '（路徑不明）'} · ${prot.savedAt ? '上次儲存 ' + esc(prot.savedAt.slice(0, 16)) : '尚未設定'}</div>
+                        <div class="sync"><span class="dot${prot.allOpen ? ' off' : ''}"></span>${esc(prot.file)}${prot.pathKnown ? '' : '（路徑不明）'} · ${
+                            prot.allOpen ? `<span class="off">保護已關閉（全開放）</span>自 ${esc(prot.allOpenSince.slice(0, 16))}`
+                                         : prot.savedAt ? '上次儲存 ' + esc(prot.savedAt.slice(0, 16)) : '尚未設定'}</div>
                     </div>
                     ${notices.join('')}
                     <details class="guide"${(guideOpen ?? !prot.configured) ? ' open' : ''}>
@@ -1242,6 +1304,7 @@
                             <li>按「儲存」。收緊馬上生效；放寬會跳出 Windows 確認視窗，你按「是」才算數。</li>
                         </ol>
                         <p class="fine">為什麼放寬要多按一次：AI 和這個頁面用的是同一把鑰匙，少了你親手按的那一下，AI 可以自己把保護關掉。確認視窗是服務自己跳出來的，只有坐在電腦前的人按得到 —— 所以你沒有按儲存卻跳出視窗時，請按「否」。<br>
+                        整個模型都不需要保護（全新的報表、沒有敏感資料）？用下面的「一鍵關閉保護」：在這個頁面按、看過說明再確認，就不用再跳視窗；同樣的請求從 API 送來（AI、腳本）照樣會跳視窗。<br>
                         做不到的事：「只能計數」擋的是列出與分組，AI 仍然可以問「有沒有叫某某的客戶」這種答案是數字的問題。</p>
                     </details>
                     <div class="prot-toolbar">${chipsHtml(n)}</div>
@@ -1458,13 +1521,16 @@
                 runWholeChange({ Changes: prot.stale.map(s => ({ Table: s.table, Column: s.column, Level: 'default' })) });
                 return;
             }
+            if (e.target.closest('[data-all-open]')) { askAllOpen(); return; }
+            if (e.target.closest('[data-restore]')) { restoreProtection(); return; }
             if (e.target.closest('[data-reset]')) runWholeChange({ Reset: true });
         }
 
         // ── 儲存 ────────────────────────────────────────────────────────
-        async function postProtection(body) {
+        const postProtection = body => postApi('/api/protection', body);
+        async function postApi(path, body) {
             try {
-                const res = await fetch('/api/protection', {
+                const res = await fetch(path, {
                     method: 'POST', headers: { ...apiHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
                 });
                 const text = await res.text();
@@ -1472,6 +1538,8 @@
                 try { j = JSON.parse(text); } catch (e) { }
                 if (res.ok) return { ok: true, data: j || {} };
                 if (res.status === 401) return { ok: false, reason: '金鑰不符：服務可能重新啟動過，請重新整理頁面（F5）。' };
+                // 路徑不存在時沒有內容；找不到 Power BI 的 404 會帶訊息
+                if (res.status === 404 && !text) return { ok: false, reason: '執行中的服務是舊版，還沒有這個功能。請關掉黑窗，重新雙擊「🚀啟動PBI終極儀表板.bat」。' };
                 const o = j && typeof j === 'object' ? j : null;
                 return {
                     ok: false,
@@ -1616,6 +1684,91 @@
                 showToast(pick(r.data, 'message', 'Message') || '已儲存', 2600);
             } finally {
                 hideWaiting();
+                setSaving(false);
+                if (prot && view === 'protection') renderProtection();
+            }
+        }
+
+        // ── 整個模型一鍵關閉／恢復 ───────────────────────────────────────
+        // 頁面自己的確認框：把會發生的事列出來，使用者按了才算。預設焦點在「取消」，按 Enter 不會誤關
+        function showConfirm({ title, html, okLabel = '確定', danger = false }) {
+            return new Promise(resolve => {
+                const box = $('confirmBox'), ok = $('confirmOk'), cancel = $('confirmCancel');
+                $('confirmTitle').textContent = title;
+                $('confirmBody').innerHTML = html;
+                ok.textContent = okLabel;
+                ok.className = 'btn btn-sm ' + (danger ? 'btn-danger' : 'btn-primary');
+                const done = v => { box.hidden = true; document.removeEventListener('keydown', onKey); ok.onclick = cancel.onclick = null; resolve(v); };
+                const onKey = e => { if (e.key === 'Escape') done(false); };
+                ok.onclick = () => done(true);
+                cancel.onclick = () => done(false);
+                document.addEventListener('keydown', onKey);
+                box.hidden = false;
+                cancel.focus();
+            });
+        }
+
+        // 關閉整個模型的保護：先向服務要說明（會影響幾欄、哪些）與一張票，列給使用者看，他確認了才帶票送出。
+        // 服務會核對這個請求是不是這個頁面送的、票對不對、人是不是在這個視窗前面 —— 都對就直接生效；
+        // 有任何一樣對不上，它會改跳 Windows 確認視窗（畫面上的等待框會說），所以這裡不會有「悄悄就關掉」的路。
+        async function askAllOpen() {
+            if (!prot || saving || !canToggleAll() || prot.allOpen) return;
+            if (!okToDropPending()) return;
+            pending.clear();
+            setSaving(true);
+            protNotice = null;
+            try {
+                const pv = await postApi('/api/protection/all-open/preview', {});
+                if (!pv.ok) { protNotice = { tone: 'warn', text: pv.reason }; return; }
+                const d = pv.data;
+                const num = k => Number(pick(d, k, k[0].toUpperCase() + k.slice(1))) || 0;
+                const total = num('totalColumns'), restricted = num('restricted'), byPattern = num('byPattern'), explicit = num('explicit');
+                const samples = pick(d, 'samples', 'Samples') || [];
+                const ticket = pick(d, 'ticket', 'Ticket');
+                if (!ticket) {
+                    protNotice = { tone: 'warn', text: '服務沒有把這個請求當成儀表板送出的（頁面不是從 http://localhost:5500/ 開的，或瀏覽器沒有帶同源標頭）。請在瀏覽器網址列輸入 http://localhost:5500/ 重新開啟儀表板，再按一次。' };
+                    return;
+                }
+                const lim = k => esc(pick(prot.limits, k, k[0].toUpperCase() + k.slice(1)) ?? '');
+                const html = `
+                    <p>檔案：<b>${esc(prot.file)}</b></p>
+                    <p>會把全部 <b>${total}</b> 欄設成「開放」。${restricted
+                        ? `其中 <b>${restricted}</b> 欄目前受限：通用規則抓到的 <b>${byPattern}</b> 欄、你逐欄設定的 <b>${explicit}</b> 欄。`
+                        : '目前沒有任何欄位受限，關閉前後 AI 讀得到的一樣多；差別是之後新增的欄位也不會被通用規則擋。'}</p>
+                    ${samples.length ? `<ul class="wlist">${samples.map(l => `<li>${esc(l)}</li>`).join('')}${restricted > samples.length ? `<li>…另有 ${restricted - samples.length} 個</li>` : ''}</ul>` : ''}
+                    <p>關閉之後 AI 讀得到這份模型每一欄的內容（逐列每次最多 ${lim('maxDetailRows')} 列、彙總 ${lim('maxAggregateRows')} 列，多問幾次就讀得完）。逐欄設定會保留，按「恢復保護」就回來。</p>
+                    <p class="fine">這是你自己在這裡按的，所以不會再跳 Windows 確認視窗。同樣的請求從 API 送來（AI、腳本），服務照樣會跳視窗要你按「是」。</p>`;
+                const ok = await showConfirm({ title: '要關閉這份模型的保護嗎？', html, okLabel: '關閉保護', danger: true });
+                if (!ok) return;
+                // 照理不會跳視窗；服務無法確認人在這個視窗前面時會 —— 等太久就把指路的畫面叫出來
+                const slow = setTimeout(() => showWaiting(null, 1, 1, true), 1200);
+                const r = await postApi('/api/protection/all-open', { AllOpen: true, Ticket: ticket });
+                clearTimeout(slow); hideWaiting();
+                if (!r.ok) {
+                    if (r.retryAfter && r.answer !== 'busy') startRetryCountdown(r.retryAfter);
+                    protNotice = { tone: 'warn', text: refusalText(r, '保護維持原狀') };
+                    return;
+                }
+                await reloadProtection();
+                showToast(pick(r.data, 'message', 'Message') || '已關閉這份模型的保護', 3200);
+            } finally {
+                hideWaiting();
+                setSaving(false);
+                if (prot && view === 'protection') renderProtection();
+            }
+        }
+
+        // 恢復：收緊，一下就好，不另外確認
+        async function restoreProtection() {
+            if (!prot || saving || !canToggleAll() || !prot.allOpen) return;
+            setSaving(true);
+            protNotice = null;
+            try {
+                const r = await postApi('/api/protection/all-open', { AllOpen: false });
+                if (!r.ok) { protNotice = { tone: 'warn', text: r.reason }; return; }
+                await reloadProtection();
+                showToast(pick(r.data, 'message', 'Message') || '已恢復保護', 3200);
+            } finally {
                 setSaving(false);
                 if (prot && view === 'protection') renderProtection();
             }

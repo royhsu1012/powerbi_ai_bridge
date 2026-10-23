@@ -62,6 +62,7 @@ $schema = Get-PbiSchema
 $prot   = Get-PbiProtection -Raw
 if (-not $prot.enabled) { throw "資料保護目前是關閉的，沒有東西可以測" }
 if ($prot.problem)      { throw $prot.problem }
+if ($prot.allOpen)      { throw "這份模型的保護已由使用者在儀表板關閉（全開放，自 $($prot.allOpenSince)），每一欄都是開放，沒有東西可以測。請他到儀表板按「恢復保護」再跑" }
 $levelOf = @{}
 foreach ($t in $prot.tables) { foreach ($c in $t.columns) { $levelOf["$($t.name)`t$($c.name)"] = $c } }
 # 上限與通用規則的樣式也問伺服器，不去讀 appsettings.json —— 服務實際用的是啟動時載入的那一份，問它才準
@@ -212,6 +213,27 @@ foreach ($d in @(
                 $(if ($blocked) { '被擋下' } elseif ($err) { '查詢錯誤' } else { '通過' })) `
                -ForegroundColor $(if ($ok) { 'Green' } else { 'Red' })
     if ($err -and -not $blocked) { Write-Host "      （非管制錯誤：$($err -replace '\s+',' ' -replace '^(.{140}).*','$1…')）" -ForegroundColor DarkGray }
+}
+
+# ── 一鍵關閉保護：票只發給儀表板 ──────────────────────────────────────────
+# 儀表板上的「一鍵關閉保護」不跳確認視窗，靠的是服務認得出那一下是瀏覽器頁面送的（同源標頭＋看過說明的票＋人在前面）。
+# 從 PowerShell 要同一份說明，必須拿不到票（fromDashboard = false）—— 拿得到的話，AI 就能照儀表板的流程把保護關掉。
+# 這裡只測「要說明」這一步；真的送關閉會跳確認視窗，不放進自動測試。
+$pvOk = $false; $pvErr = $null; $pvGotTicket = $false
+try {
+    $pv = Invoke-PbiApi -Path "/api/protection/all-open/preview" -Method POST -Body @{}
+    $pvGotTicket = [bool]$pv.ticket
+    $pvOk = (-not $pv.fromDashboard) -and (-not $pvGotTicket)
+} catch { $pvErr = "$_" }
+if ($pvErr -match '\(404\)') {
+    Write-Host "⚠️ 略過  一鍵關閉保護的說明 —— 服務是舊版，沒有這個端點" -ForegroundColor Yellow
+} else {
+    if ($pvOk) { $pass++ } else { $fail++ }
+    Write-Host ("{0}  {1,-32} 預期={2,-6} 實際={3}" -f
+                $(if ($pvOk) { '✅ 通過' } else { '❌ 失敗' }), '一鍵關閉保護：API 要不到票', '不發票',
+                $(if ($pvGotTicket) { '拿到票' } elseif ($pvErr) { '查詢錯誤' } else { '沒有票' })) `
+               -ForegroundColor $(if ($pvOk) { 'Green' } else { 'Red' })
+    if ($pvErr) { Write-Host "      （非管制錯誤：$($pvErr -replace '\s+',' ' -replace '^(.{140}).*','$1…')）" -ForegroundColor DarkGray }
 }
 
 # ── 寫入型測試：建衍生物件把資料洗到未管制的名稱下 ──────────────────────────

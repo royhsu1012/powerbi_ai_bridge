@@ -301,6 +301,14 @@ function Get-PbiOverview {
         "資料保護：⚠️ 關閉中（appsettings.json 的 DataProtection:Enabled）—— 查詢可以取出任何欄位的內容"
     } elseif ($prot.problem) {
         "資料保護：⛔ 這份模型的設定檔讀不出來，查詢全部會被擋下 —— 請使用者到儀表板的「資料保護」分頁按「重設」"
+    } elseif ($prot.allOpen) {
+        $us = $prot.underlyingSummary
+        $back = 0; if ($us) { $back = [int]$us.pseudonym + [int]$us.countOnly + [int]$us.aggregateOnly }
+        "資料保護：🔓 全開放 —— 使用者在儀表板關閉了這份模型的保護（自 $($prot.allOpenSince)），每一欄的內容都讀得到"
+        "   這是使用者自己按的；恢復後會有 $back 欄受限。要關閉或恢復都請他到儀表板按，不要替他做（列數上限與 TOCSV／INFO.* 的禁令照舊）"
+        if ($prot.inheritedFrom) {
+            "   設定是靠內容認回來的（當時的檔案：$($prot.inheritedFrom)）"
+        }
     } else {
         "資料保護：開放 $($by.open)／換成代號 $($by.pseudonym)／只能計數 $($by.countOnly)／只能彙總 $($by.aggregateOnly)"
         if (-not $prot.configured) {
@@ -575,7 +583,9 @@ function Get-PbiProtection {
       等級是結構資訊（不是資料內容），可以放心讀。
 
         level   open（開放）/ pseudonym（換成代號）/ countOnly（只能計數）/ aggregateOnly（只能彙總）
-        source  explicit＝使用者在儀表板設定的、pattern＝通用規則（appsettings.json 的樣式）、default＝預設開放
+        source  explicit＝使用者在儀表板設定的、pattern＝通用規則（appsettings.json 的樣式）、default＝預設開放、
+                allOpen＝使用者在儀表板按了「一鍵關閉保護」，整個模型全開放（這時每一欄都是 open，
+                另有 Underlying 欄寫出恢復後會回到的等級）。關閉與恢復都是使用者在儀表板按的，不要替他做
 
       預設只列出「受限」的欄位（通常只有少數幾個）；-All 列出全部。
 
@@ -583,6 +593,7 @@ function Get-PbiProtection {
         Get-PbiProtection                         # 哪些欄位受限
         Get-PbiProtection -Table Sales -All       # Sales 每一欄的等級
         (Get-PbiProtection -Raw).summary          # 各等級有幾欄
+        (Get-PbiProtection -Raw).allOpen          # 這份模型是不是全開放
     #>
     param(
         [string]$Table,
@@ -593,14 +604,17 @@ function Get-PbiProtection {
     if ($Raw) { return $r }
     if (-not $r.enabled) { Write-Warning "資料保護目前是關閉的（appsettings.json 的 DataProtection:Enabled），下列等級不會被強制執行。" }
     if ($r.problem)      { Write-Warning $r.problem }
+    if ($r.allOpen)      { Write-Warning "這份模型的保護已由使用者在儀表板關閉（全開放，自 $($r.allOpenSince)）：每一欄都是開放，下面不會有受限的欄位；-All 的 Underlying 欄是恢復後會回到的等級。要恢復請他到儀表板按「恢復保護」。" }
     foreach ($t in $r.tables) {
         if ($Table -and $t.name -notlike $Table) { continue }
         foreach ($c in $t.columns) {
             if (-not $All -and $c.level -eq 'open') { continue }
-            [PSCustomObject]@{
+            $o = [PSCustomObject]@{
                 Table = $t.name; Column = $c.name; DataType = $c.dataType
                 Level = $c.level; Source = $c.source; Rule = $c.rule
             }
+            if ($r.allOpen) { $o | Add-Member -NotePropertyName Underlying -NotePropertyValue $c.underlying }
+            $o
         }
     }
 }
